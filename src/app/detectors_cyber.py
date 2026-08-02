@@ -54,7 +54,7 @@ COLON = r"(?::|\[:\])"
 TAIL = r"[^\s<>\"']*[^\s<>\"'.,;:!?)\]]"
 
 
-def _refang(value):
+def refang(value):
     """Riporta un indicatore defangato alla forma canonica, per poterlo validare."""
     value = re.sub(r"\[\.\]|\(\.\)|\[dot\]", ".", value, flags=re.IGNORECASE)
     return value.replace("[:]", ":")
@@ -66,7 +66,7 @@ def _refang(value):
 def ip_ok(value):
     """IPv4/IPv6, singolo o come rete CIDR. Usa ipaddress della stdlib: niente
     'regex che sembra giusta' (999.1.1.1, /48 su IPv4, 6 gruppi esadecimali...)."""
-    value = _refang(value).strip()
+    value = refang(value).strip()
     try:
         if "/" in value:
             ipaddress.ip_network(value, strict=False)
@@ -81,7 +81,7 @@ def url_ok(value):
     """Forma minima di un URL: schema + host non vuoto. Il validatore serve anche a
     dare all'URL la priorita' sul dominio che contiene (vedi _merge in app.py: a pari
     fonte vince lo span validato, poi il piu' lungo)."""
-    value = _refang(value)
+    value = refang(value)
     m = re.match(r"[A-Za-z][A-Za-z0-9+.\-]*://([^/\s]+)", value)
     return bool(m and m.group(1))
 
