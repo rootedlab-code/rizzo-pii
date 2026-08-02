@@ -242,6 +242,33 @@ class TestTemplateBank(GeneratorTestCase):
         self.assertEqual(cy.load_bank(self.path), [self.GOOD])
 
 
+class TestTruncationGuard(GeneratorTestCase):
+    """Rete di sicurezza timida: la verita' la dice finish_reason, non il testo.
+
+    La versione precedente pretendeva punteggiatura terminale e su un campione di tre
+    risposte ne scartava due, entrambe integre: nelle voci di elenco e nelle timeline
+    la frase senza punto finale e' la norma, non un difetto."""
+
+    def test_a_complete_sentence_without_a_full_stop_is_not_truncated(self):
+        for ok in ("Rimozione di {FILEPATH} e cancellazione di {HASH} dal disco",
+                   "Il piano verra' rivisto il {DATE} dopo il completamento",
+                   "{DATE} {IPADDR} -> {IPADDR} {PORT} ICMP DENY regola=FW_Drop_Ping",
+                   "Elenco:\n  - {IPADDR}\n  - {HASH}"):
+            self.assertFalse(cy.looks_truncated(ok), ok)
+
+    def test_a_dangling_function_word_is_truncated(self):
+        for bad in ("applicazione di {CVE} su servizio esposto, esecuzione della",
+                    "Le evidenze sono state raccolte e trasmesse a",
+                    "Il contenimento e' stato applicato sul"):
+            self.assertTrue(cy.looks_truncated(bad), bad)
+
+    def test_a_broken_hyphenation_is_truncated(self):
+        self.assertTrue(cy.looks_truncated("ha identificato un arte-"))
+
+    def test_an_empty_template_is_truncated(self):
+        self.assertTrue(cy.looks_truncated("   "))
+
+
 class TestRecordShape(GeneratorTestCase):
 
     def test_rows_have_the_project_format(self):

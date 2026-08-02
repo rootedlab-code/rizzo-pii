@@ -521,6 +521,88 @@ def find_stray_names(text):
             + _titled_names(masked))
 
 
+SMOKE_ROUNDS = 5          # quante righe di prova si costruiscono da un template
+NEAR_DUPLICATE_RATIO = 0.90
+
+
+# Parole che non possono chiudere una frase: se il testo finisce qui, e' stato
+# tagliato a meta'. E' un elenco chiuso e piccolo di proposito — vedi looks_truncated.
+_DANGLING_WORDS = frozenset("""
+di del dello della dei degli delle d
+a al allo alla ai agli alle ad
+da dal dallo dalla dai dagli dalle
+in nel nello nella nei negli nelle
+con col coi su sul sullo sulla sui sugli sulle
+per tra fra e ed o od ma che se come quando mentre perche
+il lo la i gli le un uno una un' l
+non si ci vi ne piu meno molto anche gia ancora
+verso presso secondo durante mediante oltre senza dopo prima
+sono stato stata stati state viene vengono essere stare
+""".split())
+
+
+def looks_truncated(text):
+    """True se il testo e' visibilmente tagliato a meta'.
+
+    RETE DI SICUREZZA, non il controllo principale: la verita' sul troncamento la
+    dice `finish_reason == "length"`, che openai_compat_call legge direttamente dalla
+    risposta. Questa funzione serve solo dove quel campo non e' disponibile (la strada
+    Gemini) e per i template gia' in banca da prima.
+
+    Volutamente TIMIDA. La versione precedente pretendeva punteggiatura terminale e
+    bocciava frasi complete a cui mancava solo il punto — che nelle voci di elenco e
+    nelle timeline sono la norma: su un campione di tre risposte ne scartava due,
+    entrambe integre. Ora segnala solo cio' che non puo' chiudere una frase: una
+    parola funzione appesa ('...cancellazione di'), o una sillabazione spezzata."""
+    tail = text.rstrip()
+    if not tail:
+        return True
+    if tail.endswith("-"):                       # sillabazione interrotta
+        return True
+    last = re.findall(r"[A-Za-zÀ-ÿ']+", tail)
+    return bool(last) and last[-1].casefold().strip("'") in _DANGLING_WORDS
+
+
+def smoke_template(text, rounds=SMOKE_ROUNDS):
+    """Costruisce qualche riga dal template e la valida. Messaggio d'errore o None.
+
+    E' il controllo piu' forte che si possa fare su un template, perche' non giudica
+    il testo: guarda cosa PRODUCE. Intercetta gli slot che generano entita'
+    sovrapposte — che to_bio scarterebbe in silenzio, facendo sparire un'etichetta
+    senza che nulla lo segnali — e qualunque incoerenza di offset."""
+    register()
+    for _ in range(rounds):
+        try:
+            built, entities = gen.build_example(0, [text])
+        except (KeyError, IndexError, ValueError) as exc:
+            return f"la costruzione fallisce: {type(exc).__name__} {exc}"
+        tokens, bio = gen.to_bio(built, entities)
+        err = validate_record({"source_text": built, "entities": entities,
+                               "tokens": tokens, "bio_labels": bio})
+        if err:
+            return err
+        spans = sorted((e["start"], e["end"]) for e in entities)
+        for (_, end), (start, _) in zip(spans, spans[1:]):
+            if end > start:
+                return "produce entita' sovrapposte (to_bio ne perderebbe una)"
+    return None
+
+
+def is_near_duplicate(text, others, ratio=NEAR_DUPLICATE_RATIO):
+    """True se il template e' quasi identico a uno gia' presente.
+
+    I modelli, sullo stesso tipo di documento, riscrivono spesso la stessa struttura
+    cambiando due parole: due template gemelli non sono varieta', sono lo stesso
+    scheletro contato due volte."""
+    import difflib
+    a = " ".join(text.split()).casefold()
+    for other in others:
+        b = " ".join(other.split()).casefold()
+        if difflib.SequenceMatcher(None, a, b).ratio() >= ratio:
+            return True
+    return False
+
+
 def clean_and_validate(text):
     """Come llm_template_bank.clean_and_validate, ma sui NOSTRI segnaposto.
 
@@ -548,6 +630,14 @@ def clean_and_validate(text):
     if outside:
         print(f"  scartato: valori letterali fuori dagli spazi documentali "
               f"{sorted(set(outside))[:5]}")
+        return None
+    if looks_truncated(text):
+        print("  scartato: sembra troncato a meta' (limite di token del modello)")
+        return None
+    # ultimo e piu' severo: non si giudica il testo, si guarda cosa PRODUCE
+    err = smoke_template(text)
+    if err:
+        print(f"  scartato: non produce righe valide — {err}")
         return None
     return text
 
@@ -585,9 +675,10 @@ def save_bank(templates, path=BANK_PATH):
     merged = list(existing)
     added = 0
     for t in templates:
-        if t not in merged:
-            merged.append(t)
-            added += 1
+        if t in merged or is_near_duplicate(t, merged):
+            continue
+        merged.append(t)
+        added += 1
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), "utf-8")
@@ -613,7 +704,7 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 def openai_compat_call(prompt, base_url, model, api_key=None, timeout=300,
-                       temperature=1.0, max_tokens=1200):
+                       temperature=1.0, max_tokens=3000):
     """Una chiamata a un endpoint OpenAI-compatible. None se fallisce.
 
     Toglie gli eventuali blocchi <think>: i modelli locali con ragionamento esplicito
@@ -640,9 +731,17 @@ def openai_compat_call(prompt, base_url, model, api_key=None, timeout=300,
         print(f"  errore dal provider: {exc}")
         return None
     try:
-        text = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        text = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
         print(f"  risposta inattesa dal provider: {str(data)[:160]}")
+        return None
+    # finish_reason e' la VERITA' sul troncamento: 'length' significa che il modello
+    # e' stato tagliato dal limite di token. Indovinarlo dal testo — come facevo —
+    # boccia le frasi complete a cui manca solo il punto finale, che nelle voci di
+    # elenco e nelle timeline sono la norma.
+    if choice.get("finish_reason") == "length":
+        print("  risposta troncata dal limite di token (finish_reason=length)")
         return None
     return _THINK_RE.sub("", text or "").strip() or None
 
