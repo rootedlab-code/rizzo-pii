@@ -5,6 +5,42 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-02 — Dati sintetici del genere "documento di sicurezza"
+
+Il modello è addestrato su prosa legale italiana. I report di assessment, le timeline forensi e i
+ticket di incidente sono un altro registro, e lì peggiorano proprio i tag che la rete regex **non**
+copre — `FULLNAME`, `ORG`, `EMAIL`, `DATE`, `TELEPHONENUM` — cioè il lavoro del modello.
+
+Nuovo `src/data_pipeline/generate_cyber_pii.py`, con 27 template scritti a mano (verbale
+d'incidente, timeline, ticket, estratto di log, comunicazione al cliente, chiusura) e la strada
+Gemini opzionale per la varietà.
+
+- **Default: i valori cyber compaiono nella prosa senza etichetta.** `num_labels` non cambia, il
+  checkpoint resta compatibile, il dataset è utile subito. Serve a due cose insieme: insegnare il
+  genere documentale, e insegnare che un indirizzo IP è `O` — un modello che non ne ha mai visto
+  uno può etichettarlo come qualcos'altro. 8 template su 27 sono **deliberatamente privi di PII**:
+  sono gli esempi interamente `O`.
+- **`--label-cyber`** produce le stesse righe con i tag cyber etichettati. Cambia `num_labels`,
+  quindi impone il riaddestramento completo: tenuto separato e non default, perché quei valori sono
+  strutturati e la rete regex+validatori li copre già in modo esatto.
+- **Nessun file upstream toccato**: gli slot si registrano in `generate_synthetic_pii.SLOTS`, che è
+  un registro nome→generatore riletto da `build_example` a ogni chiamata.
+- **Invariante**: ogni valore viene *per costruzione* dagli spazi riservati alla documentazione —
+  RFC 5737 e 1918 (IPv4), 3849 (IPv6), 2606 (domini), 5398 (ASN), 7042 (MAC). Verificato su decine
+  di migliaia di campioni e su ogni riga prodotta, testo compreso: un indirizzo instradabile non
+  diventa accettabile perché non è etichettato. I wallet hanno un checksum Base58Check **valido**,
+  altrimenti il nostro detector non li rileverebbe e il dato non misurerebbe nulla.
+- Il controllo degli spazi documentali guarda solo i token il cui ultimo pezzo è un **TLD vero**,
+  preso dalla stessa lista dei detector: senza quel filtro scambiava per domini gli username
+  (`m.rossi`), i nomi di file (`index.html`) e le estensioni negli URL, scartando il 35% delle
+  righe. Una guardia che grida sempre viene disattivata.
+- **I detector ritrovano il 100%** dei valori IP/HASH/URL/DOMAIN generati (test con soglia): il
+  dataset chiude il cerchio fra le due metà del progetto.
+
+25 test nuovi, 170 in totale. Nessun impatto sul training finché il dataset non viene incluso.
+
+---
+
 ## 2026-08-02 — Scope: di chi è un valore, e policy per (tag, ruolo)
 
 Il tagger dice **quale tipo** è un valore, la policy **cosa farne**. In un documento di sicurezza

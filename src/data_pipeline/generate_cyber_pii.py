@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Dati sintetici del GENERE documentale mancante: i documenti di sicurezza.
+
+Il modello e' addestrato su prosa legale italiana. I report di assessment, le
+timeline forensi, i ticket di incidente e gli estratti di log sono un altro
+registro — piu' tecnico, con italiano e inglese mescolati, elenchi e frammenti di
+comando — e li' i tag che il modello DEVE trovare (FULLNAME, ORG, EMAIL, DATE,
+TELEPHONENUM) peggiorano. Quelli sono anche i tag che la rete regex non copre:
+sono proprio il lavoro del modello.
+
+Due modalita', stesso codice:
+
+  DEFAULT — i valori cyber (IP, domini, hash, percorsi) compaiono nella prosa
+    SENZA etichetta. La tassonomia non cambia, `num_labels` non cambia, il
+    checkpoint resta compatibile. Serve a due cose insieme: insegnare il genere
+    documentale, e insegnare che un indirizzo IP e' `O` — un modello che non ne ha
+    mai visto uno puo' etichettarlo come qualcos'altro.
+
+  --label-cyber — gli stessi valori escono ETICHETTATI (B-IP, I-IP, ...). Cambia
+    `num_labels`, quindi impone un riaddestramento completo e rende incompatibile
+    il checkpoint attuale. Tenuto separato e non default proprio per questo: i
+    valori cyber sono strutturati e la rete regex+validatori li copre gia' in modo
+    esatto, quindi il beneficio marginale e' basso e il costo alto.
+
+Principio del progetto rispettato alla lettera ("LLM autore, codice
+etichettatore", vedi CLAUDE.md): il testo con i soli segnaposto e' scritto a mano
+o da Gemini, i valori li inietta il codice — quindi le label BIO sono esatte per
+costruzione e nessuna PII reale viene mai prodotta.
+
+  INVARIANTE NON NEGOZIABILE: ogni valore generato viene dagli spazi riservati
+  alla documentazione — RFC 5737 e RFC 1918 (IPv4), RFC 3849 (IPv6), RFC 2606
+  (domini), RFC 5398 (ASN), RFC 7042 (MAC). Un dataset sintetico non deve
+  contenere un indirizzo instradabile che appartiene a qualcuno. C'e' un test che
+  lo verifica su decine di migliaia di valori generati.
+
+Nessun file upstream viene modificato: gli slot si registrano in
+generate_synthetic_pii.SLOTS, che e' un registro nome->generatore riletto da
+build_example a ogni chiamata.
+
+    python src/data_pipeline/generate_cyber_pii.py -n 5000
+    python src/data_pipeline/generate_cyber_pii.py -n 5000 --label-cyber
+    python src/data_pipeline/generate_cyber_pii.py -n 5000 --gemini --per-type 2
+"""
+
+import hashlib
+import ipaddress
+import json
+import random
+import re
+import string
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src" / "data_pipeline"))
+
+import generate_synthetic_pii as gen  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "src" / "app"))
+import detectors_cyber  # noqa: E402
+
+# Stessa lista di TLD dei detector: il controllo sugli spazi documentali deve sapere
+# cos'e' davvero un dominio, altrimenti scambia 'index.html' per uno.
+_REAL_TLDS = {t.lower() for t in detectors_cyber.TLDS}
+
+OUT_DIR = ROOT / "dataset" / "synthetic"
+GENERATOR_VERSION = "1.0.0"
+
+# --------------------------------------------------------------------------- #
+# Spazi documentali — l'invariante di sicurezza di questo modulo                #
+# --------------------------------------------------------------------------- #
+# RFC 5737: riservati agli esempi, non instradabili, non appartengono a nessuno.
+DOC_NETS_V4 = ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+# RFC 1918: reti private, per l'infrastruttura "interna" dei documenti.
+PRIVATE_NETS_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+DOC_NET_V6 = "2001:db8::/32"                    # RFC 3849
+DOC_ASN_RANGES = ((64496, 64511), (65536, 65551))   # RFC 5398
+DOC_MAC_PREFIX = "00:00:5e:00:53"               # RFC 7042 §2.1.2
+
+# RFC 2606 + i sottodomini che si costruiscono sopra.
+DOC_TLDS = ("example", "test", "invalid")
+DOC_SLD = ("example.com", "example.org", "example.net")
+
+_ALL_DOC_NETS = tuple(ipaddress.ip_network(n) for n in DOC_NETS_V4 + PRIVATE_NETS_V4)
+_DOC_NET_V6 = ipaddress.ip_network(DOC_NET_V6)
+
+_HEX = "0123456789abcdef"
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+# Parole con cui si compongono host e percorsi: nessuna e' un marchio reale.
+_HOST_WORDS = ("srv", "web", "mail", "vpn", "db", "app", "node", "gw", "proxy",
+               "backup", "share", "dc", "fs", "log", "ns")
+_SUB_WORDS = ("portale", "intranet", "clienti", "servizi", "posta", "cdn", "api",
+              "download", "update", "static", "auth")
+_BAD_WORDS = ("update-secure", "login-verify", "cdn-delivery", "doc-share",
+              "invoice-portal", "secure-mail", "cloud-sync", "account-check")
+_USERS = ("m.rossi", "a.bianchi", "g.ferrari", "l.russo", "f.esposito", "s.romano",
+          "admin", "svc_backup", "operatore", "helpdesk")
+_PATH_WORDS = ("Documenti", "Desktop", "Download", "AppData", "Temp", "backup",
+               "condivisa", "archivio", "export", "log")
+
+
+# --------------------------------------------------------------------------- #
+# Etichettatura: lo stesso generatore serve le due modalita'                    #
+# --------------------------------------------------------------------------- #
+CYBER_LABELS = ("IP", "DOMAIN", "URL", "HASH", "MAC", "ASN", "WALLET",
+                "CLOUDID", "PATH", "USER")
+
+_label_cyber = False
+
+
+def set_label_cyber(enabled):
+    """True = i valori cyber escono etichettati (cambia num_labels: riaddestramento).
+
+    Stato di modulo, come ACTIVE_DETECTORS in app.py: i generatori sono chiamati da
+    build_example senza poter ricevere parametri, quindi la modalita' va letta da
+    qualche parte al momento della chiamata."""
+    global _label_cyber
+    _label_cyber = bool(enabled)
+
+
+def _lab(label):
+    return label if _label_cyber else None
+
+
+# --------------------------------------------------------------------------- #
+# Generatori di valori — SEMPRE dentro gli spazi documentali                    #
+# --------------------------------------------------------------------------- #
+def _addr_in(net_str):
+    net = ipaddress.ip_network(net_str)
+    # niente network address ne' broadcast: sarebbero indirizzi non assegnabili
+    size = net.num_addresses
+    offset = random.randint(1, size - 2) if size > 2 else 0
+    return str(net.network_address + offset)
+
+
+def _ipv4():
+    return _addr_in(random.choice(DOC_NETS_V4 + PRIVATE_NETS_V4))
+
+
+def _ipv6():
+    # /32 documentale: si sorteggiano solo i 96 bit bassi, il prefisso resta 2001:db8
+    tail = random.getrandbits(96)
+    return str(ipaddress.IPv6Address(int(_DOC_NET_V6.network_address) + tail)).lower()
+
+
+def _hostname():
+    return f"{random.choice(_HOST_WORDS)}{random.randint(1, 99):02d}"
+
+
+def _domain(hostile=False):
+    """Dominio in spazio RFC 2606. hostile=True usa parole da phishing, ma il TLD
+    resta documentale: la forma e' credibile, il dominio non esiste."""
+    word = random.choice(_BAD_WORDS if hostile else _SUB_WORDS)
+    if random.random() < 0.35:
+        return f"{word}.{random.choice(DOC_SLD)}"
+    return f"{word}.{random.choice(DOC_TLDS)}"
+
+
+def _hex(n):
+    return "".join(random.choice(_HEX) for _ in range(n))
+
+
+def _b58check(version=0x00):
+    """Indirizzo Bitcoin con checksum Base58Check VALIDO su payload casuale.
+
+    Serve valido perche' il nostro detector lo verifica: un wallet finto ma
+    malformato non verrebbe rilevato e il dato di test non misurerebbe nulla."""
+    payload = bytes([version]) + random.getrandbits(160).to_bytes(20, "big")
+    checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    num = int.from_bytes(payload + checksum, "big")
+    out = ""
+    while num:
+        num, rem = divmod(num, 58)
+        out = _B58[rem] + out
+    return "1" * (len(payload + checksum) - len((payload + checksum).lstrip(b"\x00"))) + out
+
+
+# --------------------------------------------------------------------------- #
+# Slot (nome -> [(testo, label)], come i generatori del progetto)               #
+# --------------------------------------------------------------------------- #
+def ip_piece():
+    return [(_ipv4(), _lab("IP"))]
+
+
+def ip6_piece():
+    return [(_ipv6(), _lab("IP"))]
+
+
+def cidr_piece():
+    """Sottorete casuale di una rete privata.
+
+    L'offset si sorteggia invece di prendere net.subnets().next(): quello ritorna
+    sempre la PRIMA sottorete, e il dataset conterrebbe solo 10.0.0.0/16."""
+    net = ipaddress.ip_network(random.choice(PRIVATE_NETS_V4))
+    prefix = random.choice((16, 20, 24))
+    if prefix <= net.prefixlen:
+        return [(str(net), _lab("IP"))]
+    step = 2 ** (net.max_prefixlen - prefix)
+    base = int(net.network_address) + random.randrange(net.num_addresses // step) * step
+    return [(str(ipaddress.ip_network((base, prefix))), _lab("IP"))]
+
+
+def domain_piece():
+    return [(_domain(), _lab("DOMAIN"))]
+
+
+def bad_domain_piece():
+    return [(_domain(hostile=True), _lab("DOMAIN"))]
+
+
+def url_piece():
+    scheme = random.choice(("https", "http"))
+    path = "/".join(random.choice(("static", "cgi-bin", "api", "files", "u", "dl"))
+                    for _ in range(random.randint(1, 2)))
+    tail = random.choice((".php", ".js", ".bin", ".zip", "", "/index.html"))
+    return [(f"{scheme}://{_domain(hostile=random.random() < 0.5)}/{path}{tail}",
+             _lab("URL"))]
+
+
+def hash_piece():
+    return [(_hex(random.choice((32, 40, 64))), _lab("HASH"))]
+
+
+def mac_piece():
+    return [(f"{DOC_MAC_PREFIX}:{random.randint(0, 255):02x}", _lab("MAC"))]
+
+
+def asn_piece():
+    lo, hi = random.choice(DOC_ASN_RANGES)
+    return [(f"AS{random.randint(lo, hi)}", _lab("ASN"))]
+
+
+def wallet_piece():
+    return [(_b58check(), _lab("WALLET"))]
+
+
+def cloudid_piece():
+    kind = random.random()
+    if kind < 0.4:
+        val = "AKIA" + "".join(random.choice(string.ascii_uppercase + string.digits)
+                               for _ in range(16))
+    elif kind < 0.7:
+        val = f"i-{_hex(17)}"                       # istanza EC2
+    else:
+        val = f"arn:aws:s3:::backup-{random.choice(_SUB_WORDS)}-{random.randint(100, 999)}"
+    return [(val, _lab("CLOUDID"))]
+
+
+def path_piece():
+    user = random.choice(_USERS)
+    if random.random() < 0.5:
+        val = "C:\\Users\\" + user + "\\" + "\\".join(
+            random.choice(_PATH_WORDS) for _ in range(random.randint(1, 2)))
+    else:
+        val = "/home/" + user + "/" + "/".join(
+            random.choice(_PATH_WORDS).lower() for _ in range(random.randint(1, 2)))
+    return [(val, _lab("PATH"))]
+
+
+def user_piece():
+    user = random.choice(_USERS)
+    if random.random() < 0.5:
+        return [(f"{random.choice(('CORP', 'AZIENDA', 'INTRANET'))}\\{user}", _lab("USER"))]
+    return [(f"{user}@{_domain()}", _lab("USER"))]
+
+
+def host_piece():
+    """Nome host nudo: NON e' un dominio, resta testo normale in entrambe le modalita'."""
+    return [(_hostname(), None)]
+
+
+def port_piece():
+    return [(str(random.choice((22, 80, 443, 445, 3389, 8080, 8443, 53, 25))), None)]
+
+
+def cve_piece():
+    """Riferimento pubblico: non e' un dato di nessuno, non va MAI etichettato.
+
+    Serve nel testo perche' la keeplist dei detector deve poterlo incontrare."""
+    return [(f"CVE-{random.randint(2019, 2026)}-{random.randint(1000, 49999)}", None)]
+
+
+SLOTS = {
+    "IPADDR": ip_piece, "IPV6": ip6_piece, "CIDR": cidr_piece,
+    "DOMAIN": domain_piece, "BADDOMAIN": bad_domain_piece, "URL": url_piece,
+    "HASH": hash_piece, "MAC": mac_piece, "ASN": asn_piece, "WALLET": wallet_piece,
+    "CLOUDID": cloudid_piece, "FILEPATH": path_piece, "ACCOUNT": user_piece,
+    "HOSTNAME": host_piece, "PORT": port_piece, "CVE": cve_piece,
+}
+
+
+def register():
+    """Inserisce gli slot cyber nel registro di generate_synthetic_pii.
+
+    SLOTS li' e' una mappa nome->funzione riletta da build_example a ogni chiamata:
+    estenderla e' l'uso previsto del registro, e lascia il file upstream intatto."""
+    gen.SLOTS.update(SLOTS)
+    return SLOTS
+
+
+# --------------------------------------------------------------------------- #
+# Template di genere sicurezza — scritti a mano, solo segnaposto                #
+# --------------------------------------------------------------------------- #
+# Le PII usano gli slot GIA' ESISTENTI del progetto (sono i tag che il modello deve
+# imparare); i valori cyber usano i nostri. Nessun nome proprio inline: e' il
+# principio "LLM autore, codice etichettatore" e c'e' un test che lo verifica.
+TEMPLATES = [
+    # --- verbale / notifica di incidente ---
+    "Il {DATE} alle ore 09:14 il SOC di {ORG} ha rilevato traffico anomalo dall'host "
+    "{HOSTNAME} ({IPADDR}) verso {BADDOMAIN} sulla porta {PORT}.",
+
+    "Segnalazione ricevuta da {FULLNAME} ({EMAIL}) in data {DATE}: la postazione "
+    "{HOSTNAME} contatta ripetutamente {IPADDR} senza motivo apparente.",
+
+    "In data {DATE} l'utenza {ACCOUNT} ha effettuato l'accesso da {IPADDR}, "
+    "geolocalizzato fuori dal perimetro aziendale di {ORG}.",
+
+    "Il referente tecnico {FULLNAME}, raggiungibile al numero {PHONE}, conferma che "
+    "il segmento {CIDR} e' dedicato alle postazioni amministrative.",
+
+    # --- timeline forense ---
+    "{DATE} 03:22 - primo accesso non autorizzato all'host {HOSTNAME} ({IPADDR}) "
+    "tramite l'utenza {ACCOUNT}.\n"
+    "{DATE} 03:41 - scaricato il file da {URL}, hash SHA-256 {HASH}.\n"
+    "{DATE} 04:07 - persistenza creata in {FILEPATH}.",
+
+    "Alle 02:15 il processo ha scritto in {FILEPATH} un artefatto con hash {HASH}; "
+    "alle 02:19 lo stesso artefatto risulta trasmesso verso {IPADDR}.",
+
+    "La ricostruzione mostra il seguente percorso: {IPADDR} -> {HOSTNAME} -> "
+    "{BADDOMAIN}. L'ultimo salto avviene su infrastruttura annunciata da {ASN}.",
+
+    # --- ticket / triage ---
+    "Ticket n. 4821 aperto da {FULLNAME} il {DATE}. Priorita' alta. Sistema coinvolto: "
+    "{HOSTNAME}, indirizzo {IPADDR}, MAC {MAC}.",
+
+    "Triage: l'allegato ricevuto all'indirizzo {EMAIL} contiene un file con hash {HASH}. "
+    "L'analisi dinamica mostra una connessione verso {URL}.",
+
+    "In risposta al ticket, {FULLNAME} di {ORG} ha isolato l'host {HOSTNAME} dalla rete "
+    "{CIDR} e revocato le credenziali dell'utenza {ACCOUNT}.",
+
+    "Escalation: il caso passa a {FULLNAME} ({EMAIL}, {PHONE}) per la verifica "
+    "dell'esposizione della chiave {CLOUDID}.",
+
+    # --- estratti di log e comandi ---
+    "Estratto del log del firewall:\n"
+    "  {DATE} 11:02:44 DENY {IPADDR}:{PORT} -> {IPADDR}:{PORT}\n"
+    "  {DATE} 11:02:51 ALLOW {IPADDR}:{PORT} -> {IPADDR}:{PORT}",
+
+    "Il record DNS interrogato dall'host compromesso risolveva {BADDOMAIN} "
+    "sull'indirizzo {IPADDR}, poi ruotato su {IPV6}.",
+
+    "Nel journal compare la riga: connessione da {ACCOUNT} verso {IPADDR} porta {PORT}, "
+    "chiusa dopo 3 secondi.",
+
+    "Sono stati raccolti gli artefatti in {FILEPATH} e in {FILEPATH}; entrambi "
+    "riconducibili all'utenza {ACCOUNT}.",
+
+    # --- comunicazioni al cliente / esecutivo ---
+    "Gentile {FULLNAME}, come concordato le trasmettiamo il riepilogo dell'attivita' "
+    "svolta per {ORG} in data {DATE}. Per chiarimenti puo' scrivere a {EMAIL}.",
+
+    "Il perimetro concordato con {ORG} comprende la rete {CIDR} e i sistemi esposti "
+    "sugli indirizzi {IPADDR} e {IPADDR}.",
+
+    "Si raccomanda a {ORG} di applicare la patch per {CVE} su tutti i sistemi del "
+    "segmento {CIDR} entro il {DATE}.",
+
+    "La valutazione di impatto e' stata condivisa con {FULLNAME} il {DATE}; il costo "
+    "stimato del fermo servizio ammonta a {AMOUNT}.",
+
+    "Referente per il seguito: {FULLNAME}, {ORG}, {EMAIL}, tel. {PHONE}. "
+    "Sede operativa in {ADDRESS}.",
+
+    # --- indicatori, elenchi, exfil ---
+    "Indicatori di compromissione rilevati:\n"
+    "  - {IPADDR}\n  - {BADDOMAIN}\n  - {HASH}\n  - {URL}",
+
+    "Il riscatto e' stato richiesto in criptovaluta all'indirizzo {WALLET}, con "
+    "scadenza indicata al {DATE}.",
+
+    "I dati risultano trasferiti verso lo storage {CLOUDID}, con accesso effettuato "
+    "dall'indirizzo {IPADDR}.",
+
+    "Il dominio {BADDOMAIN} e' registrato da meno di trenta giorni e risolve su "
+    "{IPADDR}, all'interno del sistema autonomo {ASN}.",
+
+    "Le credenziali dell'utenza {ACCOUNT} risultano riutilizzate su {DOMAIN}, "
+    "circostanza segnalata a {FULLNAME} il {DATE}.",
+
+    # --- verifiche e chiusura ---
+    "Verifica di chiusura del {DATE}: l'host {HOSTNAME} ({IPADDR}) risulta "
+    "reinstallato, la regola verso {BADDOMAIN} e' attiva, {CVE} risulta corretta.",
+
+    "Nessuna evidenza residua nei percorsi {FILEPATH}; il monitoraggio su {CIDR} "
+    "prosegue per trenta giorni, come concordato con {FULLNAME}.",
+]
+
+
+# --------------------------------------------------------------------------- #
+# Template da Gemini (facoltativi): stessa macchina del progetto                #
+# --------------------------------------------------------------------------- #
+ALLOWED_SLOTS = set(SLOTS) | {
+    "FULLNAME", "ORG", "EMAIL", "PHONE", "DATE", "CITY", "ADDRESS", "AMOUNT",
+}
+
+DOC_TYPES = [
+    "verbale di rilevazione di un incidente informatico",
+    "timeline forense di una compromissione",
+    "ticket di incident response con note di triage",
+    "estratto di log di firewall commentato",
+    "comunicazione al cliente sull'esito di un assessment",
+    "sommario esecutivo di un test di sicurezza",
+]
+
+PROMPT = """Sei un analista di sicurezza italiano. Scrivi un {doc_type} REALISTICO
+(da 6 a 14 righe), nel registro tecnico che si usa davvero in questi documenti.
+
+REGOLA ASSOLUTA: NON scrivere MAI dati concreti. Al loro posto usa ESCLUSIVAMENTE
+questi segnaposto, che verranno sostituiti dal codice:
+{slot_list}
+
+Non inventare nomi di persone, aziende, indirizzi IP, domini, hash o percorsi:
+usa il segnaposto corrispondente. Non aggiungere segnaposto non elencati.
+Rispondi con il solo testo del documento, senza commenti e senza markdown.
+
+{slot_hints}"""
+
+SLOT_HINTS = """  {IPADDR}    = indirizzo IP  |  {CIDR} = rete in notazione CIDR
+  {HOSTNAME}  = nome host nudo (non un dominio)  |  {PORT} = numero di porta
+  {BADDOMAIN} = dominio riconducibile all'attaccante  |  {DOMAIN} = dominio legittimo
+  {ACCOUNT}   = utenza di dominio o indirizzo di accesso
+  {FILEPATH}  = percorso su disco  |  {CLOUDID} = identificativo di risorsa cloud
+  {CVE}       = riferimento pubblico a una vulnerabilita'"""
+
+
+def clean_and_validate(text):
+    """Come llm_template_bank.clean_and_validate, ma sui NOSTRI segnaposto.
+
+    Riusa find_stray_names: e' la guardia che scarta i template in cui l'LLM ha
+    scritto un nome proprio invece di usare il segnaposto, ed e' esattamente cio'
+    che tiene in piedi il principio 'LLM autore, codice etichettatore'."""
+    import llm_template_bank as tb
+    if not text:
+        return None
+    text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    slots = set(gen.SLOT_RE.findall(text))
+    if not slots:
+        return None
+    unknown = slots - ALLOWED_SLOTS
+    if unknown:
+        print(f"  scartato: segnaposto non consentiti {sorted(unknown)}")
+        return None
+    stray = tb.find_stray_names(text)
+    if stray:
+        print(f"  scartato: probabili nomi inline non taggati {sorted(set(stray))[:8]}")
+        return None
+    return text
+
+
+def gemini_templates(per_type):
+    """Fa scrivere a Gemini nuovi template di genere sicurezza. [] senza chiave."""
+    import os
+    if not os.environ.get("GEMINI_API_KEY"):
+        print("GEMINI_API_KEY non impostata: uso i soli template scritti a mano.")
+        return []
+    import llm_template_bank as tb
+    slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
+    out, total, done = [], len(DOC_TYPES) * per_type, 0
+    print(f"Scrivo {total} template con Gemini [{tb.MODEL}] ...")
+    for doc_type in DOC_TYPES:
+        for _ in range(per_type):
+            done += 1
+            text = clean_and_validate(tb.call_gemini(
+                PROMPT.format(doc_type=doc_type, slot_list=slot_list,
+                              slot_hints=SLOT_HINTS)))
+            if text:
+                out.append(text)
+            print(f"  [{done:>3}/{total}] {doc_type:52s} {'OK' if text else 'scartato'}")
+    print(f"Template nuovi validi: {len(out)}/{total}")
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Validazione delle righe prodotte                                             #
+# --------------------------------------------------------------------------- #
+_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+_DOMAIN_RE = re.compile(r"\b(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+([A-Za-z]{2,})\b")
+
+# Domini dei generatori UPSTREAM (email_piece / PEC): non sono RFC 2606 ma sono la
+# scelta del progetto, e questo modulo non li produce ne' li cambia.
+UPSTREAM_DOC_DOMAINS = ("example.it", "pec.it")
+
+
+def _is_doc_domain(value):
+    value = value.lower().rstrip(".")
+    if value.rsplit(".", 1)[-1] in DOC_TLDS:              # *.example / *.test / *.invalid
+        return True
+    return any(value == d or value.endswith("." + d)
+               for d in DOC_SLD + UPSTREAM_DOC_DOMAINS)
+
+
+def in_documentation_space(text):
+    """Elenco delle violazioni dell'invariante: valori fuori dagli spazi riservati.
+
+    Vale su TUTTO il testo, non solo sulle entita': un indirizzo instradabile non
+    diventa accettabile perche' non e' etichettato.
+
+    Per i domini si guardano SOLO i token il cui ultimo pezzo e' un TLD vero, presi
+    dalla stessa lista che usano i detector. Senza quel filtro la regex di forma
+    scambia per domini gli username ('m.rossi'), i nomi di file ('index.html') e le
+    estensioni negli URL — e un controllo che grida sempre viene disattivato."""
+    bad = []
+    for m in _IP_RE.finditer(text):
+        try:
+            addr = ipaddress.ip_address(m.group())
+        except ValueError:
+            continue
+        if not any(addr in net for net in _ALL_DOC_NETS):
+            bad.append(m.group())
+    for m in _DOMAIN_RE.finditer(text):
+        if m.group(1).lower() in _REAL_TLDS and not _is_doc_domain(m.group()):
+            bad.append(m.group())
+    return bad
+
+
+def validate_record(rec):
+    """Controlli strutturali + invariante degli spazi documentali. None = valido."""
+    if len(rec["tokens"]) != len(rec["bio_labels"]):
+        return "tokens/bio_labels di lunghezza diversa"
+    for e in rec["entities"]:
+        if rec["source_text"][e["start"]:e["end"]] != e["value"]:
+            return f"offset entita' incoerente: {e}"
+    bad = in_documentation_space(rec["source_text"])
+    if bad:
+        return f"valori fuori dagli spazi documentali: {sorted(set(bad))[:5]}"
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Generazione                                                                  #
+# --------------------------------------------------------------------------- #
+def build(n, templates, handle="local", seed=None):
+    """Genera n righe nel formato del progetto. Ritorna (righe, conteggi, scartate)."""
+    if seed is not None:
+        random.seed(seed)
+    register()
+    rows, counts, bad = [], {}, 0
+    for _ in range(n):
+        tid = random.randrange(len(templates))
+        text, entities = gen.build_example(tid, templates)
+        tokens, bio = gen.to_bio(text, entities)
+        rec = {
+            "source_text": text,
+            "language": "it",
+            "template_id": tid,
+            "entities": entities,
+            "tokens": tokens,
+            "bio_labels": bio,
+            "meta": {"contributor": handle, "seed": seed, "synthetic": True,
+                     "generator_version": GENERATOR_VERSION,
+                     "genre": "security", "cyber_labeled": _label_cyber},
+        }
+        err = validate_record(rec)
+        if err:
+            bad += 1
+            continue
+        for e in entities:
+            counts[e["label"]] = counts.get(e["label"], 0) + 1
+        rows.append(rec)
+    return rows, counts, bad
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Genera documenti di sicurezza sintetici nel formato del progetto.")
+    ap.add_argument("-n", type=int, default=5000, help="numero di righe (default 5000)")
+    ap.add_argument("--out", default=None, help="file .jsonl di destinazione")
+    ap.add_argument("--seed", type=int, default=42, help="seed RNG (default 42)")
+    ap.add_argument("--label-cyber", action="store_true",
+                    help="etichetta anche i valori cyber (CAMBIA num_labels: impone "
+                         "il riaddestramento completo, checkpoint attuale incompatibile)")
+    ap.add_argument("--gemini", action="store_true",
+                    help="chiedi a Gemini template nuovi (richiede GEMINI_API_KEY)")
+    ap.add_argument("--per-type", type=int, default=2,
+                    help="quanti template per tipo di documento chiedere a Gemini")
+    args = ap.parse_args()
+
+    set_label_cyber(args.label_cyber)
+    templates = list(TEMPLATES)
+    if args.gemini:
+        templates += gemini_templates(args.per_type)
+
+    suffix = "cyberlabeled" if args.label_cyber else "plain"
+    out_path = Path(args.out) if args.out else OUT_DIR / f"synthetic_security_it_{suffix}.jsonl"
+
+    print("=" * 70)
+    print("Documenti di sicurezza sintetici — nessun valore reale, mai")
+    print(f"modalita': {'tag cyber ETICHETTATI (riaddestramento)' if args.label_cyber else 'tag invariati'}"
+          f" | template: {len(templates)} | n={args.n} | seed={args.seed}")
+    print("=" * 70)
+
+    rows, counts, bad = build(args.n, templates, seed=args.seed)
+    if bad:
+        print(f"ATTENZIONE: {bad} righe scartate dal self-check")
+    print(f"Righe valide: {len(rows)}. Entita' per label:")
+    for label, c in sorted(counts.items(), key=lambda x: -x[1]):
+        print(f"  {label:16s} {c}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    tmp.replace(out_path)
+    print(f"\nScritto -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -48,6 +48,14 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   variabili → `dataset/synthetic/synthetic_pii_it_realaug.jsonl`. Spezza il legame template/posizione.
 - `prepare_deepmount.py` — rimappa `DeepMount00/pii-masking-ita` (56 tipi Faker IT) sui 22 tag →
   `dataset/processed/deepmount_pii_it_{train,test}.jsonl`.
+- `generate_cyber_pii.py` — **genere documentale "sicurezza"**: report, timeline forensi, ticket,
+  estratti di log. Registra i propri slot in `generate_synthetic_pii.SLOTS` (nessun file upstream
+  modificato). **Default**: i valori cyber compaiono nella prosa *senza etichetta* → `num_labels`
+  invariato, checkpoint compatibile; insegna il registro tecnico e insegna che un IP è `O`.
+  **`--label-cyber`**: gli stessi valori etichettati → cambia `num_labels`, **impone il
+  riaddestramento**. `--gemini` per template nuovi (richiede `GEMINI_API_KEY`). Ogni valore viene
+  **per costruzione** dagli spazi documentali (RFC 5737/1918/3849/2606/5398/7042) e c'è un test che
+  lo verifica su decine di migliaia di campioni.
 - `build_validation.py` — **unica validation reale** → `dataset/validation/validation_real.jsonl`.
 - `build_subset.py` — subset stratificati (multilingua + tag) per smoke test →
   `dataset/subsets/{train_subset_10k,val_subset_5k}.jsonl`.
