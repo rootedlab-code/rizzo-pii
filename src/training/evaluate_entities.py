@@ -188,8 +188,50 @@ def report(stat, title):
     return r, p, f
 
 
+def from_bio(rec):
+    """Converte una riga {tokens, bio_labels} nel formato {source_text, entities}.
+
+    Serve per la validation legale del progetto, che e' distribuita per token: senza
+    conversione non si potrebbe misurare la REGRESSIONE, cioe' se addestrando sul
+    genere sicurezza il modello peggiora sul caso d'uso originale. E' il controllo che
+    si salta sempre, perche' richiede di misurare qualcosa che non si sta cercando di
+    migliorare.
+
+    I token si uniscono con uno spazio: il testo ricostruito non ha la spaziatura
+    originale, ma gold e predizione partono dallo stesso identico testo, quindi il
+    confronto resta valido."""
+    parts, entities, pos = [], [], 0
+    corrente = None
+    for token, label in zip(rec["tokens"], rec["bio_labels"]):
+        start = pos
+        parts.append(token)
+        pos += len(token) + 1
+        end = start + len(token)
+        tipo = label.split("-", 1)[1] if label != "O" and "-" in label else None
+        if tipo and label.startswith("I-") and corrente and corrente["label"] == tipo:
+            corrente["end"] = end
+            continue
+        if corrente:
+            entities.append(corrente)
+            corrente = None
+        if tipo:
+            corrente = {"start": start, "end": end, "label": tipo}
+    if corrente:
+        entities.append(corrente)
+    text = " ".join(parts)
+    for e in entities:
+        e["value"] = text[e["start"]:e["end"]]
+    return {"source_text": text, "entities": entities,
+            "tokens": rec["tokens"], "bio_labels": rec["bio_labels"]}
+
+
 def load(path):
-    return [json.loads(line) for line in Path(path).open(encoding="utf-8")]
+    """Legge un .jsonl del progetto, in entrambi i formati in circolazione."""
+    out = []
+    for line in Path(path).open(encoding="utf-8"):
+        rec = json.loads(line)
+        out.append(rec if "source_text" in rec else from_bio(rec))
+    return out
 
 
 def main():

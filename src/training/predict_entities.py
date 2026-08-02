@@ -102,7 +102,9 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="usa solo le prime N righe")
     args = ap.parse_args()
 
-    rows = [json.loads(line) for line in Path(args.gold).open(encoding="utf-8")]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from evaluate_entities import load as load_rows      # gestisce i due formati
+    rows = load_rows(args.gold)
     if args.limit:
         rows = rows[:args.limit]
     print(f"{len(rows)} righe da {args.gold}")
