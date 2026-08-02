@@ -42,8 +42,46 @@ import detectors_cyber  # noqa: E402
 Entity = collections.namedtuple("Entity", "start end label")
 
 
-def entities_of(rec):
-    return {Entity(e["start"], e["end"], e["label"]) for e in rec["entities"]}
+# Rimappatura del training (train_pii.py: TAG_MAP e DROP_TYPES), applicata AL
+# CARICAMENTO ai dati grezzi. Va applicata anche qui, altrimenti si confronta un gold
+# con GIVENNAME+SURNAME contro un modello che produce FULLNAME e i nomi segnano
+# recall 0 — un numero falso che sembrerebbe una scoperta.
+#
+# E' una copia, e le copie divergono: c'e' un test che rilegge train_pii.py e
+# verifica che questa sia identica alla sua.
+TAG_MAP = {
+    "GIVENNAME": "FULLNAME", "SURNAME": "FULLNAME",
+    "GIUDICE": "FULLNAME", "AVVOCATO": "FULLNAME", "CONVENUTO": "FULLNAME",
+    "ATTORE": "FULLNAME", "TESTIMONE": "FULLNAME",
+    "SEX": "GENDER", "TAXNUM": "PIVA", "PEC": "EMAIL", "RG": "DOCID",
+    "IDCARDNUM": "ID_DOC", "PASSPORTNUM": "ID_DOC",
+    "DRIVERLICENSENUM": "ID_DOC", "SOCIALNUM": "ID_DOC", "CONTO": "IBAN",
+}
+DROP_TYPES = {"TITLE", "TRIBUNAL"}
+
+
+def normalize_entities(entities, text, apply_map=True):
+    """Rimappa i tipi e FONDE le entita' adiacenti dello stesso tipo.
+
+    La fusione e' la parte che conta: 'Mario' (GIVENNAME) e 'Rossi' (SURNAME) sono due
+    entita' separate nel dato grezzo, con uno spazio non etichettato in mezzo, e il
+    modello ne produce una sola — 'Mario Rossi' (FULLNAME). Senza fondere, lo span non
+    coincide e l'entita' risulta mancata."""
+    out = []
+    for e in sorted(entities, key=lambda x: x.start):
+        label = TAG_MAP.get(e.label, e.label) if apply_map else e.label
+        if label in DROP_TYPES:
+            continue
+        if out and out[-1].label == label and not text[out[-1].end:e.start].strip():
+            out[-1] = Entity(out[-1].start, e.end, label)
+        else:
+            out.append(Entity(e.start, e.end, label))
+    return set(out)
+
+
+def entities_of(rec, normalize=False):
+    ents = {Entity(e["start"], e["end"], e["label"]) for e in rec["entities"]}
+    return normalize_entities(ents, rec["source_text"]) if normalize else ents
 
 
 def _load_app():
@@ -141,6 +179,11 @@ def main():
                          "senza questo si valuta la rete regex")
     ap.add_argument("--labels", default=None,
                     help="limita ai soli tag indicati, es. \"IP,DOMAIN,HASH\"")
+    ap.add_argument("--normalize", action="store_true",
+                    help="applica TAG_MAP e fonde le entita' adiacenti, come fa il "
+                         "training al caricamento. SERVE per confrontarsi con un "
+                         "modello addestrato: senza, GIVENNAME+SURNAME nel gold non "
+                         "coincidono col FULLNAME che il modello produce")
     args = ap.parse_args()
 
     labels = {t.strip().upper() for t in args.labels.split(",")} if args.labels else None
@@ -157,11 +200,12 @@ def main():
         for g, p in zip(gold_rows, pred_rows):
             if g["source_text"] != p["source_text"]:
                 sys.exit("ERRORE: i due file non contengono gli stessi testi")
-        pairs = [(keep(entities_of(g)), keep(entities_of(p)))
+        pairs = [(keep(entities_of(g, args.normalize)),
+                  keep(entities_of(p, args.normalize)))
                  for g, p in zip(gold_rows, pred_rows)]
         report(score(pairs), f"Predizioni da {args.pred}")
     else:
-        pairs = [(keep(entities_of(g)),
+        pairs = [(keep(entities_of(g, args.normalize)),
                   keep(detector_entities(g["source_text"], labels)))
                  for g in gold_rows]
         r, _p, _f = report(score(pairs), "Rete regex+validatori (campione da battere)")

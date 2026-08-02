@@ -186,3 +186,40 @@ class TestCidrPool(PoolTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLabelNormalisation(unittest.TestCase):
+    """Senza rimappare, il gold e il modello parlano due lingue diverse."""
+
+    TEXT = "Il perito Mario Rossi ha firmato."
+
+    def test_adjacent_name_parts_become_one_fullname(self):
+        raw = {ev.Entity(10, 15, "GIVENNAME"), ev.Entity(16, 21, "SURNAME")}
+        self.assertEqual(ev.normalize_entities(raw, self.TEXT),
+                         {ev.Entity(10, 21, "FULLNAME")})
+
+    def test_entities_far_apart_are_not_merged(self):
+        text = "Mario ha incontrato Rossi ieri."
+        raw = {ev.Entity(0, 5, "GIVENNAME"), ev.Entity(20, 25, "SURNAME")}
+        self.assertEqual(len(ev.normalize_entities(raw, text)), 2)
+
+    def test_dropped_types_disappear(self):
+        raw = {ev.Entity(0, 2, "TITLE"), ev.Entity(10, 15, "GIVENNAME")}
+        self.assertEqual({e.label for e in ev.normalize_entities(raw, self.TEXT)},
+                         {"FULLNAME"})
+
+    def test_the_copied_tag_map_matches_the_training_one(self):
+        # la copia esiste perche' train_pii.py importa torch; ma le copie divergono,
+        # quindi qui si rilegge la fonte e si confronta
+        import ast
+        src = (ROOT / "src" / "training" / "train_pii.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        found = {}
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id in ("TAG_MAP", "DROP_TYPES"):
+                found[target.id] = ast.literal_eval(node.value)
+        self.assertEqual(found["TAG_MAP"], ev.TAG_MAP)
+        self.assertEqual(found["DROP_TYPES"], ev.DROP_TYPES)
