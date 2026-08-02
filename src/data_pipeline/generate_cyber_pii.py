@@ -44,6 +44,7 @@ build_example a ogni chiamata.
     python src/data_pipeline/generate_cyber_pii.py -n 5000 --gemini --per-type 2
 """
 
+import collections
 import hashlib
 import ipaddress
 import json
@@ -764,6 +765,59 @@ def in_documentation_space(text):
     return bad
 
 
+# --------------------------------------------------------------------------- #
+# Deduplicazione — le stesse regole del dataset 'clean' del progetto            #
+# --------------------------------------------------------------------------- #
+# La pipeline di pulizia del progetto non sta nel repo: e' documentata nella card
+# di rizzoaiacademy/anonimizzazione-testi-italiano-clean. I primi due passaggi sono
+# quelli che contano per dati generati da template:
+#
+#   1. deduplicazione esatta di source_text
+#   2. cap a N righe per SCHELETRO (il testo con i valori delle entita' rimessi al
+#      loro tag) — non per template: un template con casualita' interna produce
+#      scheletri diversi, ed e' varieta' vera.
+#
+# Qui lo scheletro normalizza anche cifre e sequenze esadecimali, perche' nella
+# modalita' predefinita i valori cyber NON sono entita': senza, un IP diverso a ogni
+# riga farebbe sembrare unica una struttura che e' identica.
+DEFAULT_CAP_PER_SKELETON = 20
+
+_HEXRUN_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
+_DIGITS_RE = re.compile(r"\d+")
+
+
+def skeleton(rec):
+    """Struttura di una riga, indipendente dai valori iniettati."""
+    text, out, pos = rec["source_text"], [], 0
+    for e in sorted(rec["entities"], key=lambda x: x["start"]):
+        out.append(text[pos:e["start"]])
+        out.append("{" + e["label"] + "}")
+        pos = e["end"]
+    out.append(text[pos:])
+    s = _HEXRUN_RE.sub("§", "".join(out))
+    return _DIGITS_RE.sub("#", s)
+
+
+def dedupe(rows, cap=DEFAULT_CAP_PER_SKELETON):
+    """Applica deduplicazione esatta e cap per scheletro. Ritorna (righe, statistiche)."""
+    seen_text, per_skeleton, out = set(), collections.Counter(), []
+    n_dup = n_cap = 0
+    for rec in rows:
+        if rec["source_text"] in seen_text:
+            n_dup += 1
+            continue
+        seen_text.add(rec["source_text"])
+        if cap:
+            key = skeleton(rec)
+            if per_skeleton[key] >= cap:
+                n_cap += 1
+                continue
+            per_skeleton[key] += 1
+        out.append(rec)
+    return out, {"duplicati_esatti": n_dup, "oltre_il_cap": n_cap,
+                 "scheletri": len(per_skeleton)}
+
+
 def validate_record(rec):
     """Controlli strutturali + invariante degli spazi documentali. None = valido."""
     if len(rec["tokens"]) != len(rec["bio_labels"]):
@@ -835,6 +889,12 @@ def main():
                     help="nome del modello per --provider openai (anche PII_LLM_MODEL)")
     ap.add_argument("--per-type", type=int, default=2,
                     help="quanti template per tipo di documento chiedere al modello")
+    ap.add_argument("--templates-only", action="store_true",
+                    help="raccogli solo template nella banca, NON rigenerare il dataset "
+                         "(altrimenti ogni giro di raccolta lo sovrascrive)")
+    ap.add_argument("--cap-per-skeleton", type=int, default=DEFAULT_CAP_PER_SKELETON,
+                    help=f"massimo di righe per scheletro, come il dataset 'clean' del "
+                         f"progetto (default {DEFAULT_CAP_PER_SKELETON}; 0 = nessun cap)")
     args = ap.parse_args()
 
     set_label_cyber(args.label_cyber)
@@ -875,9 +935,23 @@ def main():
           f" | template: {len(templates)} | n={args.n} | seed={args.seed}")
     print("=" * 70)
 
+    if args.templates_only:
+        print(f"\n(--templates-only) Banca a {len(load_bank())} template. "
+              f"Dataset NON rigenerato.")
+        return
+
     rows, counts, bad = build(args.n, templates, seed=args.seed)
     if bad:
         print(f"ATTENZIONE: {bad} righe scartate dal self-check")
+
+    rows, stat = dedupe(rows, args.cap_per_skeleton)
+    if args.cap_per_skeleton:
+        print(f"Deduplicazione (regole del dataset 'clean'): "
+              f"{stat['duplicati_esatti']} duplicati esatti, "
+              f"{stat['oltre_il_cap']} oltre il cap di {args.cap_per_skeleton} per "
+              f"scheletro, {stat['scheletri']} scheletri distinti")
+    counts = collections.Counter(e["label"] for r in rows for e in r["entities"])
+
     print(f"Righe valide: {len(rows)}. Entita' per label:")
     for label, c in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {label:16s} {c}")
