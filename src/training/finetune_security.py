@@ -105,6 +105,13 @@ def build_dataset(rows, tokenizer, label2id, tag_map, drop):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--train", required=True, help=".jsonl di addestramento")
+    ap.add_argument("--rehearsal", default=None,
+                    help="ripasso: .jsonl del dominio ORIGINALE da mescolare. Senza, "
+                         "il modello DIMENTICA — misurato: bastano 180 esempi di solo "
+                         "genere sicurezza per far scendere il legale da 0.822 a 0.763 "
+                         "e azzerare TARGA")
+    ap.add_argument("--rehearsal-ratio", type=float, default=1.0,
+                    help="quante righe di ripasso per ogni riga nuova (default 1.0)")
     ap.add_argument("--out", required=True, help="dove salvare il modello")
     ap.add_argument("--base", default=BASE_MODEL)
     ap.add_argument("--epochs", type=float, default=EPOCHS)
@@ -128,6 +135,18 @@ def main():
 
     rows = load(args.train)
     print(f"{len(rows)} righe da {args.train}")
+    if args.rehearsal:
+        import random
+        ripasso = load(args.rehearsal)
+        quante = min(len(ripasso), int(len(rows) * args.rehearsal_ratio))
+        random.Random(42).shuffle(ripasso)
+        rows = rows + ripasso[:quante]
+        random.Random(42).shuffle(rows)
+        print(f"  + {quante} righe di ripasso da {args.rehearsal} -> {len(rows)} totali")
+    else:
+        print("  ATTENZIONE: nessun ripasso. Il modello DIMENTICHERA' il dominio "
+              "originale;\n  misurato: 180 esempi bastano a far scendere il legale "
+              "da 0.822 a 0.763.")
     ds = build_dataset(rows, tokenizer, label2id, TAG_MAP, DROP_TYPES)
     print(f"  {len(ds)} esempi di addestramento")
 

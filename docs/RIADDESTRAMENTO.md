@@ -135,6 +135,53 @@ li ha. Sono deterministici e validati sul calendario: non c'e' ragione tecnica p
 cui debbano restare dietro un'opzione opt-in — solo la scelta, che non e' nostra, di
 dove metterli.
 
+## 2-bis. LA SONDA — da superare PRIMA di accendere il pod
+
+Costa cinque minuti su CPU e ha gia' bocciato la ricetta iniziale. Non e' una
+formalita': e' il motivo per cui il pod non va acceso adesso.
+
+```bash
+head -200  dataset/synthetic/synthetic_security_it_plain_train.jsonl > /tmp/mini_train.jsonl
+head -1000 dataset/subsets/train_subset_10k.jsonl                    > /tmp/mini_ripasso.jsonl
+
+python src/training/finetune_security.py \
+    --train /tmp/mini_train.jsonl --rehearsal /tmp/mini_ripasso.jsonl \
+    --out /tmp/sonda --epochs 1 --batch 4
+
+python src/training/predict_entities.py dataset/validation/validation_real.jsonl \
+    --out /tmp/legale_sonda.jsonl --limit 300 --model /tmp/sonda
+python src/training/evaluate_entities.py dataset/validation/validation_real.jsonl \
+    --pred /tmp/legale_sonda.jsonl --normalize --limit 300 --with-detectors --packs ""
+```
+
+**Criterio:** il micro sul legale non deve scendere. Se scende su 180 esempi,
+scendera' molto di piu' su 26.851 per due epoche — la sonda e' 150 volte piu'
+piccola dell'addestramento vero.
+
+### Cosa ha gia' detto la sonda (2026-08-02)
+
+| configurazione | micro recall | precision |
+|---|--:|--:|
+| modello rilasciato | **0.817** | 0.752 |
+| dopo fine-tuning, senza ripasso | 0.759 | 0.700 |
+| dopo fine-tuning, ripasso 1:1 | 0.767 | 0.704 |
+
+`TARGA` passa da 0.667 a 0.000 senza ripasso. E' dimenticanza catastrofica, e il
+ripasso 1:1 la riduce appena.
+
+Da provare, in quest'ordine, rimisurando ogni volta con la sonda:
+
+1. `--rehearsal-ratio 3` o `4` — piu' dominio originale che nuovo
+2. `--lr 5e-6` invece di `2e-5`
+3. congelare gli strati bassi e addestrare solo la testa di classificazione
+4. **riequilibrare `DATE`**, che nel nostro training e' il **64.1%** delle entita'
+   contro il 13.5% del pool legale: da solo puo' spiegare buona parte dello
+   spostamento
+
+**Cautela sul campione:** la sonda usa 300 righe (634 entita'). Le differenze di
+cinque punti sono un segnale, non una misura di precisione. Prima di dichiarare
+risolto qualcosa, rimisurare su `--limit 2000`.
+
 ## 3. Fine-tuning
 
 ```bash
