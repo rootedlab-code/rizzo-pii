@@ -47,3 +47,4 @@ Thumbs.db
 # gli indicatori dell'avversario. Questa e' solo una rete, non il posto giusto.
 scope.json
 *.scope.json
+dataset/validation/
