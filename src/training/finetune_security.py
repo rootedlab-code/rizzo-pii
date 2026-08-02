@@ -30,6 +30,7 @@ cyber: servono come `O`, per insegnare che quelle stringhe non sono niente.
 """
 
 import argparse
+import collections
 import json
 import sys
 from pathlib import Path
@@ -60,6 +61,76 @@ def bio_of(rec, label2id, tag_map, drop):
         nuovo = "O" if tipo in drop else f"{prefix}-{tipo}"
         out.append(nuovo if nuovo in label2id else "O")
     return out
+
+
+def tags_of(rec, tag_map, drop):
+    """Tipi presenti in una riga, gia' rimappati nella tassonomia del modello."""
+    out = set()
+    for label in rec["bio_labels"]:
+        if label.startswith("B-"):
+            tipo = tag_map.get(label[2:], label[2:])
+            if tipo not in drop:
+                out.add(tipo)
+    return out
+
+
+def stratified_rehearsal(pool, quante, nuove, tag_map, drop, seed=42):
+    """Sceglie le righe di ripasso per coprire i tag che i dati NUOVI non contengono.
+
+    Il campionamento casuale non basta perche' il problema non e' la quantita' totale
+    di ripasso ma la copertura per tag: misurato, i tag che degradano nel fine-tuning
+    (CATASTO, ID_DOC, TIME, DOCID, TARGA) sono esattamente quelli che i documenti di
+    sicurezza non nominano mai. Un verbale di incidente non contiene dati catastali:
+    l'assenza e' la realta' del dominio, non un difetto da correggere nei dati nuovi.
+
+    Percio' il ripasso viene scelto a turno fra i tag mancanti, dal piu' raro nel pool
+    al piu' comune: cosi' un tag con poche righe disponibili non viene schiacciato da
+    uno che ne ha migliaia."""
+    import random
+
+    presenti = set()
+    for rec in nuove:
+        presenti |= tags_of(rec, tag_map, drop)
+
+    per_tag = collections.defaultdict(list)
+    for i, rec in enumerate(pool):
+        for t in tags_of(rec, tag_map, drop):
+            per_tag[t].append(i)
+
+    mancanti = sorted((t for t in per_tag if t not in presenti),
+                      key=lambda t: len(per_tag[t]))
+    print(f"  tag assenti dai dati nuovi: {', '.join(mancanti) or 'nessuno'}")
+
+    rng = random.Random(seed)
+    for indici in per_tag.values():
+        rng.shuffle(indici)
+
+    scelti, cursore = [], collections.Counter()
+    visti = set()
+    # giro a turno: una riga per tag mancante, dal piu' raro; poi si ricomincia
+    while len(scelti) < quante and mancanti:
+        progresso = False
+        for t in mancanti:
+            if len(scelti) >= quante:
+                break
+            lista = per_tag[t]
+            while cursore[t] < len(lista):
+                i = lista[cursore[t]]
+                cursore[t] += 1
+                if i not in visti:
+                    visti.add(i)
+                    scelti.append(pool[i])
+                    progresso = True
+                    break
+        if not progresso:
+            break
+
+    # il resto si completa a caso, per non impoverire i tag comuni
+    if len(scelti) < quante:
+        resto = [r for i, r in enumerate(pool) if i not in visti]
+        rng.shuffle(resto)
+        scelti += resto[:quante - len(scelti)]
+    return scelti
 
 
 def build_dataset(rows, tokenizer, label2id, tag_map, drop):
@@ -110,6 +181,10 @@ def main():
                          "il modello DIMENTICA — misurato: bastano 180 esempi di solo "
                          "genere sicurezza per far scendere il legale da 0.822 a 0.763 "
                          "e azzerare TARGA")
+    ap.add_argument("--rehearsal-strategy", choices=("random", "stratified"),
+                    default="random",
+                    help="'stratified' sceglie le righe di ripasso per coprire i tag "
+                         "che i dati nuovi NON contengono — sono quelli che degradano")
     ap.add_argument("--rehearsal-ratio", type=float, default=1.0,
                     help="quante righe di ripasso per ogni riga nuova (default 1.0)")
     ap.add_argument("--out", required=True, help="dove salvare il modello")
@@ -139,8 +214,12 @@ def main():
         import random
         ripasso = load(args.rehearsal)
         quante = min(len(ripasso), int(len(rows) * args.rehearsal_ratio))
-        random.Random(42).shuffle(ripasso)
-        rows = rows + ripasso[:quante]
+        if args.rehearsal_strategy == "stratified":
+            scelte = stratified_rehearsal(ripasso, quante, rows, TAG_MAP, DROP_TYPES)
+        else:
+            random.Random(42).shuffle(ripasso)
+            scelte = ripasso[:quante]
+        rows = rows + scelte
         random.Random(42).shuffle(rows)
         print(f"  + {quante} righe di ripasso da {args.rehearsal} -> {len(rows)} totali")
     else:
