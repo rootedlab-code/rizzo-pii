@@ -99,6 +99,42 @@ python src/training/evaluate_entities.py dataset/validation/validation_real.json
 `--limit 2000` va tenuto **identico** prima e dopo: due campioni diversi non si
 confrontano.
 
+### Le baseline gia' misurate (2026-08-02, modello `rizzoaiacademy/rizzo-pii-0.3B`)
+
+Sono i numeri da superare. Se rimisurandoli non vengono uguali, qualcosa e' cambiato
+nell'ambiente e va capito prima di addestrare.
+
+**Genere sicurezza** — 1.113 righe, 31 template mai visti, valori mai visti:
+
+| | recall | precision | |
+|---|--:|--:|---|
+| solo modello | 0.429 | 0.270 | `DATE` 0.090, e ~2.700 entita' inventate su stringhe tecniche |
+| modello + regex | **0.854** | **0.703** | `DATE` 0.948 grazie ai detector aggiunti |
+
+**Validation legale** — 2.000 righe, controllo di **regressione**:
+
+| | recall | precision |
+|---|--:|--:|
+| solo modello | 0.719 | 0.582 |
+| **modello + regex core** | **0.783** | **0.712** |
+
+La differenza fra le due righe e' istruttiva: il modello **frammenta** gli
+identificatori lunghi — `RCCMRT60T58H703I` esce come `CF`+`CF`+`ID_DOC`+`ID_DOC`+`CF`
+— e sono i checksum della rete core a recuperarli (`CF` da 0.018 a 1.000, `PIVA` da
+0.145 a 0.961). Misurare il modello da solo su quei tag misura qualcosa che in
+produzione non decide niente: **il numero da confrontare e' sempre quello del
+sistema**.
+
+Debolezze del sistema sul legale, per riferimento: `DOCID` 0.083,
+`CREDITCARDNUMBER` 0.090, `AMOUNT` 0.140, `IBAN` 0.287, `DATE` 0.295,
+`CATASTO` 0.371, `ZIPCODE` 0.379, `AGE` 0.445.
+
+Nota utile: sul legale `DATE` sta a **0.295**, e i detector `DATE` che risolvono il
+problema stanno nel pacchetto `cyber`, quindi un utente del dominio legale oggi non
+li ha. Sono deterministici e validati sul calendario: non c'e' ragione tecnica per
+cui debbano restare dietro un'opzione opt-in — solo la scelta, che non e' nostra, di
+dove metterli.
+
 ## 3. Fine-tuning
 
 ```bash

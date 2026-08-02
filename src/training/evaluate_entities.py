@@ -107,26 +107,40 @@ def _load_app():
     return app
 
 
-def detector_entities(text, labels=None, merge=True):
+def _regex_candidates(text, packs=()):
+    """Candidati della rete regex ATTIVA dell'app: core piu' i pacchetti richiesti.
+
+    Usare i soli detector cyber sarebbe sbagliato su documenti legali: CF, IBAN, PIVA
+    e carta di credito li risolve la rete CORE con i checksum, ed e' li' che il
+    prodotto ripone la fiducia — il modello quegli identificatori li FRAMMENTA
+    ('RCCMRT60T58H703I' esce come CF+CF+ID_DOC+ID_DOC+CF). Misurare il modello da solo
+    su quei tag misura qualcosa che in produzione non decide niente."""
+    app = _load_app()
+    app.enable_packs(list(packs))
+    cands = []
+    for label, rx, validator, _strict in app.ACTIVE_DETECTORS:
+        for m in rx.finditer(text):
+            ok = validator is None or validator(m.group())
+            if ok or not _strict:
+                cands.append({"start": m.start(), "end": m.end(), "label": label,
+                              "score": 1.0, "source": "regex", "validated": bool(ok)})
+    return cands
+
+
+def detector_entities(text, labels=None, merge=True, packs=("cyber",)):
     """Entita' secondo la rete regex+validatori. E' il campione da battere.
 
     merge=True applica la stessa risoluzione delle sovrapposizioni dell'app, che e'
     cio' che conta: il numero utile e' quanto sbaglia il SISTEMA, non quanto si
     accavallano i suoi pezzi."""
-    cands = []
-    for label, rx, validator, _strict in detectors_cyber.DETECTORS:
-        for m in rx.finditer(text):
-            ok = validator is None or validator(m.group())
-            if ok:
-                cands.append({"start": m.start(), "end": m.end(), "label": label,
-                              "score": 1.0, "source": "regex", "validated": ok})
+    cands = _regex_candidates(text, packs)
     if merge:
         cands = _load_app()._merge(cands, text)
     return {Entity(c["start"], c["end"], c["label"]) for c in cands
             if not labels or c["label"] in labels}
 
 
-def combined_entities(text, model_entities, labels=None):
+def combined_entities(text, model_entities, labels=None, packs=("cyber",)):
     """Modello + rete regex, fusi come fa analyze(): e' cio' che gira davvero.
 
     Misurare il solo modello dice quanto e' bravo il modello; misurare le sole regex
@@ -136,12 +150,7 @@ def combined_entities(text, model_entities, labels=None):
     cands = [{"start": e.start, "end": e.end, "label": e.label,
               "score": 1.0, "source": "modello", "validated": False}
              for e in model_entities]
-    for label, rx, validator, _strict in detectors_cyber.DETECTORS:
-        for m in rx.finditer(text):
-            ok = validator is None or validator(m.group())
-            if ok:
-                cands.append({"start": m.start(), "end": m.end(), "label": label,
-                              "score": 1.0, "source": "regex", "validated": ok})
+    cands += _regex_candidates(text, packs)
     merged = _load_app()._merge(cands, text)
     return {Entity(c["start"], c["end"], c["label"]) for c in merged
             if not labels or c["label"] in labels}
@@ -242,6 +251,13 @@ def main():
                          "senza questo si valuta la rete regex")
     ap.add_argument("--labels", default=None,
                     help="limita ai soli tag indicati, es. \"IP,DOMAIN,HASH\"")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="usa solo le prime N righe del gold. Deve coincidere con il "
+                         "--limit usato in predizione: due campioni diversi non si "
+                         "confrontano, e il controllo di regressione perderebbe senso")
+    ap.add_argument("--packs", default="cyber",
+                    help="pacchetti di detector attivi, es. \"cyber\" oppure \"\" per il "
+                         "solo core. Sui documenti legali il core basta ed e' corretto")
     ap.add_argument("--with-detectors", action="store_true",
                     help="fonde le predizioni con la rete regex, come fa analyze(): "
                          "e' la misura del PRODOTTO, non di una sua meta'")
@@ -253,7 +269,10 @@ def main():
     args = ap.parse_args()
 
     labels = {t.strip().upper() for t in args.labels.split(",")} if args.labels else None
+    packs = tuple(p.strip() for p in args.packs.split(",") if p.strip())
     gold_rows = load(args.gold)
+    if args.limit:
+        gold_rows = gold_rows[:args.limit]
     print(f"{len(gold_rows)} righe da {args.gold}")
 
     def keep(entities):
@@ -269,7 +288,8 @@ def main():
         if args.with_detectors:
             pairs = [(keep(entities_of(g, args.normalize)),
                       keep(combined_entities(g["source_text"],
-                                             entities_of(p, args.normalize), labels)))
+                                             entities_of(p, args.normalize),
+                                             labels, packs)))
                      for g, p in zip(gold_rows, pred_rows)]
             titolo = f"Modello ({args.pred}) + rete regex, fusi come nell'app"
         else:
@@ -280,7 +300,7 @@ def main():
         report(score(pairs), titolo)
     else:
         pairs = [(keep(entities_of(g, args.normalize)),
-                  keep(detector_entities(g["source_text"], labels)))
+                  keep(detector_entities(g["source_text"], labels, packs=packs)))
                  for g in gold_rows]
         r, _p, _f = report(score(pairs), "Rete regex+validatori (campione da battere)")
         print(f"\n  Un modello addestrato sui tag cyber deve superare recall {r:.3f}")
