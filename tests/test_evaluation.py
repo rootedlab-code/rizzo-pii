@@ -160,3 +160,29 @@ class TestDetectorBaseline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCidrPool(PoolTestCase):
+    """Il pool delle reti CIDR e' dichiarato, non dedotto da is_private.
+
+    Python considera privati anche gli intervalli documentali RFC 5737, quindi un
+    filtro su is_private faceva finire 198.51.100.0/24 fra le reti "interne" di un
+    documento — una rete di esempi presentata come rete aziendale."""
+
+    def test_documentation_ranges_never_appear_as_internal_networks(self):
+        doc = [ipaddress.ip_network(n) for n in cy.DOC_NETS_V4]
+        for pool in cy.VALUE_POOLS:
+            cy.set_value_pool(pool)
+            for _ in range(200):
+                sub = ipaddress.ip_network(cy.cidr_piece()[0][0])
+                for d in doc:
+                    self.assertFalse(sub.subnet_of(d), f"{pool}: {sub} dentro {d}")
+
+    def test_train_and_eval_cidr_pools_do_not_overlap(self):
+        cy.set_value_pool("train")
+        t = {ipaddress.ip_network(cy.cidr_piece()[0][0]) for _ in range(200)}
+        cy.set_value_pool("eval")
+        e = {ipaddress.ip_network(cy.cidr_piece()[0][0]) for _ in range(200)}
+        for a in t:
+            for b in e:
+                self.assertFalse(a.overlaps(b), f"{a} e {b}")

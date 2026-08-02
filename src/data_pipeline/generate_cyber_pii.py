@@ -138,11 +138,16 @@ _PATH_WORDS = ("Documenti", "Desktop", "Download", "AppData", "Temp", "backup",
 EVAL_PERCENT = 20
 
 VALUE_POOLS = {
-    "all": {"v4": DOC_NETS_V4 + PRIVATE_NETS_V4,
+    # 'cidr' e' dichiarato a parte e NON dedotto con is_private: Python considera
+    # privati anche gli intervalli documentali RFC 5737, quindi un filtro su
+    # is_private faceva finire 198.51.100.0/24 fra le reti "interne" di un documento.
+    "all": {"v4": DOC_NETS_V4 + PRIVATE_NETS_V4, "cidr": PRIVATE_NETS_V4,
             "tld": DOC_TLDS, "asn": DOC_ASN_RANGES},
     "train": {"v4": ("192.0.2.0/24", "198.51.100.0/24", "10.0.0.0/8", "172.16.0.0/12"),
+              "cidr": ("10.0.0.0/8", "172.16.0.0/12"),
               "tld": ("example", "test"), "asn": ((64496, 64511),)},
     "eval": {"v4": ("203.0.113.0/24", "192.168.0.0/16"),
+             "cidr": ("192.168.0.0/16",),
              "tld": ("invalid",), "asn": ((65536, 65551),)},
 }
 
@@ -271,8 +276,7 @@ def cidr_piece():
 
     L'offset si sorteggia invece di prendere net.subnets().next(): quello ritorna
     sempre la PRIMA sottorete, e il dataset conterrebbe solo 10.0.0.0/16."""
-    privati = [n for n in _pool["v4"] if ipaddress.ip_network(n).is_private]
-    net = ipaddress.ip_network(random.choice(privati or PRIVATE_NETS_V4))
+    net = ipaddress.ip_network(random.choice(_pool["cidr"]))
     prefix = random.choice((16, 20, 24))
     if prefix <= net.prefixlen:
         return [(str(net), _lab("IP"))]
