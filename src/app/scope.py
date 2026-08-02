@@ -20,7 +20,7 @@ Quattro ruoli:
 Risoluzione, in quest'ordine:
 
     1. LISTE ESPLICITE     deterministiche, hanno sempre la precedenza
-    2. CONTESTO            indizi testuali attorno al valore, solo se non elencato
+    2. CONTESTO            indizi testuali attorno al valore — SPENTO per default
     3. unknown             tutto cio' che resta
 
 Il principio che governa ogni caso dubbio e' **fail-closed**: nell'incertezza si
@@ -28,6 +28,14 @@ risponde `unknown`, che a valle significa "maschera". In un tool di privacy un
 falso negativo e' un dato sensibile in chiaro, un falso positivo e' una parola
 illeggibile: non sono errori simmetrici. Per questo indizi di ruoli diversi nella
 stessa finestra non "vincono ai punti" — annullano la decisione.
+
+La stessa asimmetria e' il motivo per cui **il contesto e' opt-in**. Un `own`
+sbagliato dedotto dal testo produce mascheramento in piu', innocuo; un
+`adversary` sbagliato produce un dato sensibile in chiaro. Un'euristica non deve
+poter sbloccare il "lascia in chiaro" da sola: chi la vuole dichiara quali ruoli
+puo' assegnare, con `context.roles`. Dimenticarsene maschera di piu', mai di
+meno. (Il caso che ha imposto la regola: la sola parola "payload" a 53 caratteri
+di distanza bastava a marcare `adversary` un indirizzo del cliente non elencato.)
 
 Il file di scope contiene gli indirizzi del cliente e gli indicatori
 dell'avversario: e' il file piu' sensibile del sistema. Sta FUORI dalla repo, uno
@@ -39,8 +47,11 @@ mascherato — il comportamento storico, invariato.
       "own":       {"IP": ["10.0.0.0/8", "203.0.113.5"], "DOMAIN": ["cliente.example"]},
       "adversary": {"IP": ["198.51.100.7"], "DOMAIN": ["evil.example"]},
       "public":    {"DOMAIN": ["vendor.example"]},
-      "context":   {"window": 60, "cues": {"adversary": ["c2"], "own": ["cliente"]}}
+      "context":   {"roles": ["adversary"], "window": 60, "cues": {"adversary": ["c2"]}}
     }
+
+Senza `context.roles` il blocco `context` non accende nulla: decidono solo le
+liste. `cues` e' facoltativo — omesso, si usano gli indizi predefiniti.
 
 I valori dello scope non escono MAI dal modulo: `counts()` espone quanti sono per
 ruolo e per tag, mai quali. L'unica eccezione e' il messaggio di ScopeError su un
@@ -181,17 +192,20 @@ def _matches(label, value, entry):
 class Scope:
     """Assegna un ruolo a un valore rilevato.
 
-    lists:   {ruolo: {tag: [voci]}} — le voci sono gia' normalizzate qui dentro.
-    window:  ampiezza in caratteri della finestra di contesto per lato.
-    cues:    {ruolo: [indizi testuali]}; None = DEFAULT_CUES.
+    lists:         {ruolo: {tag: [voci]}} — le voci sono normalizzate qui dentro.
+    window:        ampiezza in caratteri della finestra di contesto per lato.
+    cues:          {ruolo: [indizi testuali]}; None = DEFAULT_CUES.
+    context_roles: ruoli che il contesto PUO' assegnare. Vuoto (default) = contesto
+                   spento, decidono solo le liste.
     """
 
-    def __init__(self, lists=None, window=DEFAULT_WINDOW, cues=None):
+    def __init__(self, lists=None, window=DEFAULT_WINDOW, cues=None, context_roles=()):
         self.lists = {role: {} for role in ROLES}
         for role, by_label in (lists or {}).items():
             for label, entries in (by_label or {}).items():
                 self.lists[role][str(label).upper()] = tuple(_norm(e) for e in entries)
         self.window = int(window)
+        self.context_roles = tuple(r for r in ROLES if r in tuple(context_roles))
         self.cues = {r: tuple(c) for r, c in (DEFAULT_CUES if cues is None else cues).items()
                      if r in ROLES and c}
         self._cue_res = {role: re.compile("|".join(re.escape(c) for c in items),
@@ -238,12 +252,19 @@ class Scope:
 
         Indizi di piu' ruoli nella stessa finestra -> None: la frase parla di entrambe
         le parti e il contesto non e' in grado di decidere. Meglio `unknown`, cioe'
-        mascherato, che una scelta a maggioranza su un dato sensibile."""
-        if not text or start is None or end is None or not self._cue_res:
+        mascherato, che una scelta a maggioranza su un dato sensibile.
+
+        L'ambiguita' si valuta su TUTTI gli indizi, anche quelli di ruoli che il
+        contesto non ha il permesso di assegnare: una frase che nomina sia il cliente
+        sia l'attaccante resta ambigua a prescindere da cosa e' abilitato, e filtrare
+        prima farebbe sparire proprio il segnale che deve bloccare la decisione."""
+        if not self.context_roles or not text or start is None or end is None:
             return None
         window = text[max(0, start - self.window):end + self.window]
         hits = [role for role, rx in self._cue_res.items() if rx.search(window)]
-        return hits[0] if len(hits) == 1 else None
+        if len(hits) != 1:
+            return None
+        return hits[0] if hits[0] in self.context_roles else None
 
     def role_of(self, label, value, text=None, start=None, end=None):
         """ScopeMatch(role, source) per un'entita' rilevata.
@@ -272,6 +293,7 @@ class Scope:
 
     def as_dict(self):
         return {"counts": self.counts(), "window": self.window,
+                "context_roles": list(self.context_roles),
                 "cues": {role: len(items) for role, items in sorted(self.cues.items())}}
 
     def __repr__(self):
@@ -330,20 +352,33 @@ def _parse_context(data, warn):
     if window < 0:
         raise ScopeError("'context.window' non puo' essere negativo")
 
+    raw_roles = ctx.get("roles", ())
+    if isinstance(raw_roles, str) or not isinstance(raw_roles, (list, tuple)):
+        raise ScopeError("'context.roles' deve essere una lista di ruoli")
+    context_roles = [str(r).strip().lower() for r in raw_roles if str(r).strip()]
+    unknown = [r for r in context_roles if r not in ROLES]
+    if unknown:
+        warn(f"ruoli sconosciuti in context.roles, ignorati: {', '.join(sorted(unknown))} "
+             f"(attesi: {', '.join(ROLES)})")
+        context_roles = [r for r in context_roles if r in ROLES]
+
     raw_cues = ctx.get("cues")
-    if raw_cues is None:
-        return window, None
-    if not isinstance(raw_cues, dict):
+    if raw_cues is not None and (not isinstance(raw_cues, dict)):
         raise ScopeError("'context.cues' deve essere un oggetto {ruolo: [indizi]}")
-    cues = {}
-    for role, items in raw_cues.items():
-        if role not in ROLES:
-            warn(f"indizi ignorati per il ruolo sconosciuto '{role}'")
-            continue
-        if isinstance(items, str) or not isinstance(items, (list, tuple)):
-            raise ScopeError(f"'context.cues.{role}' deve essere una lista di stringhe")
-        cues[role] = [str(i).strip().casefold() for i in items if str(i).strip()]
-    return window, cues
+    if raw_cues is not None and context_roles == []:
+        warn("'context.cues' e' presente ma 'context.roles' e' vuoto: il contesto "
+             "resta spento e gli indizi non verranno usati")
+    cues = None
+    if raw_cues is not None:
+        cues = {}
+        for role, items in raw_cues.items():
+            if role not in ROLES:
+                warn(f"indizi ignorati per il ruolo sconosciuto '{role}'")
+                continue
+            if isinstance(items, str) or not isinstance(items, (list, tuple)):
+                raise ScopeError(f"'context.cues.{role}' deve essere una lista di stringhe")
+            cues[role] = [str(i).strip().casefold() for i in items if str(i).strip()]
+    return window, cues, context_roles
 
 
 def load_scope(cli_path=None, warn=_warn):
@@ -367,5 +402,6 @@ def load_scope(cli_path=None, warn=_warn):
     if not isinstance(data, dict):
         raise ScopeError(f"il file di scope deve contenere un oggetto JSON: {path}")
 
-    window, cues = _parse_context(data, warn)
-    return Scope(lists=_parse_lists(data, warn), window=window, cues=cues)
+    window, cues, context_roles = _parse_context(data, warn)
+    return Scope(lists=_parse_lists(data, warn), window=window, cues=cues,
+                 context_roles=context_roles)
