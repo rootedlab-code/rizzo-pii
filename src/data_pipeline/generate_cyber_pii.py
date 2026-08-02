@@ -56,6 +56,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src" / "data_pipeline"))
 
+# .env PRIMA di importare i moduli che leggono le env var a import-time
+# (llm_template_bank fissa API_KEY quando viene importato).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
 import generate_synthetic_pii as gen  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "src" / "app"))
@@ -438,13 +446,78 @@ SLOT_HINTS = """  {IPADDR}    = indirizzo IP  |  {CIDR} = rete in notazione CIDR
   {CVE}       = riferimento pubblico a una vulnerabilita'"""
 
 
+# Termini tecnici che nei documenti di sicurezza si scrivono in maiuscolo. Servono a
+# togliere i falsi positivi di find_stray_names, che e' tarato sulla prosa legale
+# italiana dove due maiuscole di fila sono quasi sempre "Nome Cognome": qui sono
+# "Security Operations Center" o "Remote Code Execution", e senza questo elenco si
+# scartava oltre meta' dei template.
+#
+# Il filtro e' ADDITIVO e il nucleo della guardia resta: una coppia viene perdonata
+# solo se ENTRAMBE le parole sono qui dentro. "Mario Rossi" viene scartato come
+# prima, e anche "Security Rossi" — che e' il caso che conta davvero, il nome vero
+# accanto al termine tecnico.
+#
+# Nessun termine di questo elenco e' un cognome o un nome italiano plausibile: e' il
+# criterio con cui e' stato compilato, e va applicato a ogni aggiunta futura.
+SECURITY_CAPITALIZED = frozenset("""
+Access Account Action Active Alert Analysis Assessment Attack Audit Authentication
+Availability Backup Beacon Blocked Breach Category Chain Cloud Code Command Compliance
+Compromise Confidentiality Containment Content Control Critical Custody Data Database
+Defender Denied Destination Detection Directory Domain Encryption Endpoint Escalation
+Evidence Executive Execution Exfiltration Exploit Exposure Filtering Finding Findings
+Firewall Forensic Center Framework Gateway Governance Hardening Hash High Host Identity
+Impact Incident Indicator Injection Integrity Intelligence Isolation Lateral Least
+Level Lockdown Log Logging Low Malicious Malware Management Medium Mitigation Monitoring
+Movement Network Note Notes Operations Owner Patch Payload Penetration Perimeter
+Persistence Phishing Policy Port Priority Privilege Protocol Quarantined Ransomware
+Recovery Remediation Remote Report Response Review Risk Scope Scanning Security Session
+Severity Source Status Summary Surface Test Testing Threat Ticket Timeline Traffic
+Triage Update Vector Vulnerability
+Analisi Assessment Attivita Chiusura Compromissione Contenimento Criticita Evidenze
+Impatto Incidente Informatico Isolamento Mitigazione Perimetro Procedere Raccomandazioni
+Remediazione Rilevazione Rischio Riscontro Riepilogo Segnalazione Severita Sicurezza
+Valutazione Verifica Vulnerabilita
+""".split())
+
+
+def _is_technical_pair(pair):
+    """True se una coppia segnalata e' fatta di soli termini tecnici.
+
+    L'elisione si taglia come fa il guard upstream (dell'Host -> Host): senza,
+    "l'Isolamento dell'Host" resterebbe un falso positivo."""
+    return all(w.split("'")[-1].strip(".:;,") in SECURITY_CAPITALIZED
+               for w in pair.split())
+
+
+def _titled_names(text):
+    """Nomi preceduti da un titolo scritto CON il punto: 'Sig. Bianchi', 'Dott. Neri'.
+
+    Copre un caso che il guard upstream lascia passare: li' il salto di fine frase
+    ('if a[-1] in ".:;!?": continue') scatta prima del controllo sui titoli, quindi
+    'Sig Bianchi' viene intercettato ma 'Sig. Bianchi' — cioe' il modo normale di
+    scriverlo — no. Vale anche per il dataset legale: da segnalare a monte."""
+    import llm_template_bank as tb
+    titles = "|".join(re.escape(t) for t in sorted(tb.TITLES, key=len, reverse=True))
+    rx = re.compile(rf"\b({titles})\.\s+([A-ZÀ-Þ][A-Za-zÀ-ÿ']+)")
+    return [f"{m.group(1)}. {m.group(2)}" for m in rx.finditer(text)
+            if m.group(2) not in SECURITY_CAPITALIZED]
+
+
+def find_stray_names(text):
+    """find_stray_names del progetto, meno i falsi positivi del gergo di sicurezza
+    e piu' i nomi con titolo puntato che il guard upstream non vede."""
+    import llm_template_bank as tb
+    masked = re.sub(r"\{\w+\}", " ", text)          # i segnaposto non sono nomi
+    return ([p for p in tb.find_stray_names(text) if not _is_technical_pair(p)]
+            + _titled_names(masked))
+
+
 def clean_and_validate(text):
     """Come llm_template_bank.clean_and_validate, ma sui NOSTRI segnaposto.
 
     Riusa find_stray_names: e' la guardia che scarta i template in cui l'LLM ha
     scritto un nome proprio invece di usare il segnaposto, ed e' esattamente cio'
     che tiene in piedi il principio 'LLM autore, codice etichettatore'."""
-    import llm_template_bank as tb
     if not text:
         return None
     text = re.sub(r"^```.*?\n|```$", "", text.strip(), flags=re.MULTILINE).strip()
@@ -455,9 +528,17 @@ def clean_and_validate(text):
     if unknown:
         print(f"  scartato: segnaposto non consentiti {sorted(unknown)}")
         return None
-    stray = tb.find_stray_names(text)
+    stray = find_stray_names(text)
     if stray:
         print(f"  scartato: probabili nomi inline non taggati {sorted(set(stray))[:8]}")
+        return None
+    # L'invariante va verificata QUI, non solo sulle righe generate: se il modello
+    # scrive un indirizzo letterale invece del segnaposto, a valle ogni riga nata da
+    # quel template verrebbe scartata in silenzio e non si capirebbe perche'.
+    outside = in_documentation_space(text)
+    if outside:
+        print(f"  scartato: valori letterali fuori dagli spazi documentali "
+              f"{sorted(set(outside))[:5]}")
         return None
     return text
 
@@ -594,7 +675,13 @@ def main():
     set_label_cyber(args.label_cyber)
     templates = list(TEMPLATES)
     if args.gemini:
-        templates += gemini_templates(args.per_type)
+        new = gemini_templates(args.per_type)
+        templates += new
+        if not new:
+            # senza questo, quota esaurita o chiave assente producevano in silenzio un
+            # dataset con la sola varieta' dei template scritti a mano
+            print("\nATTENZIONE: nessun template nuovo da Gemini (quota, chiave o rete).\n"
+                  "  Il dataset avra' la sola varieta' dei template scritti a mano.\n")
 
     suffix = "cyberlabeled" if args.label_cyber else "plain"
     out_path = Path(args.out) if args.out else OUT_DIR / f"synthetic_security_it_{suffix}.jsonl"

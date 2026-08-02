@@ -147,6 +147,48 @@ class TestTemplates(GeneratorTestCase):
             self.assertIs(gen.SLOTS[name], fn, name)
 
 
+class TestStrayNameGuard(GeneratorTestCase):
+    """Il filtro sul gergo tecnico e' additivo: il nucleo della guardia deve reggere.
+
+    Il caso che conta e' l'ultimo — un cognome vero ACCANTO a un termine tecnico. Se
+    passasse, il dataset conterrebbe un nome non etichettato e il modello imparerebbe
+    a non vederlo."""
+
+    def _rejected(self, text):
+        return bool(cy.find_stray_names(text))
+
+    def test_security_jargon_in_title_case_is_not_a_name(self):
+        for benign in ("Security Operations Center attivo",
+                       "Remote Code Execution e Vulnerability Assessment",
+                       "Il Contenimento e l'Isolamento dell'Host",   # elisioni
+                       "Threat Intelligence, Incident Response, Penetration Test"):
+            self.assertFalse(self._rejected(benign), benign)
+
+    def test_a_real_name_is_still_rejected(self):
+        self.assertTrue(self._rejected("il perito Mario Rossi ha verificato"))
+
+    def test_a_titled_name_with_the_dot_is_rejected(self):
+        # caso che il guard upstream lascia passare: li' il salto di fine frase
+        # scatta prima del controllo sui titoli
+        self.assertTrue(self._rejected("Sig. Bianchi ha aperto il ticket"))
+        self.assertTrue(self._rejected("Dott. Neri del reparto Incident Response"))
+
+    def test_a_name_next_to_a_technical_term_is_still_rejected(self):
+        self.assertTrue(self._rejected("l'analista Security Rossi conferma"))
+        self.assertTrue(self._rejected("Security Operations Center di Mario Rossi"))
+
+    def test_no_security_term_is_a_plausible_italian_surname(self):
+        # criterio con cui l'elenco e' stato compilato: va applicato a ogni aggiunta
+        surnames = {"Rossi", "Bianchi", "Ferrari", "Russo", "Esposito", "Romano",
+                    "Costa", "Greco", "Bruno", "Gallo", "Conti", "Mancini", "Rizzo",
+                    "Lombardi", "Moretti", "Barbieri", "Fontana", "Santoro", "Leone",
+                    "Serra", "Villa", "Conte", "Bianco", "Longo", "Vitale", "Marino"}
+        self.assertEqual(cy.SECURITY_CAPITALIZED & surnames, set())
+
+    def test_a_placeholder_is_never_taken_for_a_name(self):
+        self.assertFalse(self._rejected("Riferimento: {FULLNAME} di {ORG}"))
+
+
 class TestRecordShape(GeneratorTestCase):
 
     def test_rows_have_the_project_format(self):
