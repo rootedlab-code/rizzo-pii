@@ -122,6 +122,64 @@ _PATH_WORDS = ("Documenti", "Desktop", "Download", "AppData", "Temp", "backup",
 
 
 # --------------------------------------------------------------------------- #
+# Split di valutazione: template disgiunti E valori disgiunti                   #
+# --------------------------------------------------------------------------- #
+# Due separazioni, perche' misurano due cose diverse.
+#
+# TEMPLATE disgiunti: dice se il modello generalizza a STRUTTURE mai viste, invece
+# di aver imparato a memoria le frasi del training. E' lo stesso criterio dello
+# split del dataset 'clean' del progetto.
+#
+# VALORI disgiunti: dice se ha imparato la FORMA di un indirizzo o solo i prefissi.
+# E' la trappola specifica di questo dataset — tutti i nostri IP vengono da sei
+# intervalli, quindi valutare con gli stessi intervalli darebbe F1 altissimo e
+# nessuna informazione. Addestrando su 192.0.2/198.51.100 e valutando su 203.0.113,
+# un modello che ha memorizzato i prefissi crolla e uno che ha capito la forma tiene.
+EVAL_PERCENT = 20
+
+VALUE_POOLS = {
+    "all": {"v4": DOC_NETS_V4 + PRIVATE_NETS_V4,
+            "tld": DOC_TLDS, "asn": DOC_ASN_RANGES},
+    "train": {"v4": ("192.0.2.0/24", "198.51.100.0/24", "10.0.0.0/8", "172.16.0.0/12"),
+              "tld": ("example", "test"), "asn": ((64496, 64511),)},
+    "eval": {"v4": ("203.0.113.0/24", "192.168.0.0/16"),
+             "tld": ("invalid",), "asn": ((65536, 65551),)},
+}
+
+_pool = VALUE_POOLS["all"]
+
+
+def set_value_pool(name):
+    """Sceglie da quali intervalli documentali pescano i generatori.
+
+    L'invariante di sicurezza NON cambia: in_documentation_space continua ad accettare
+    tutti gli spazi riservati, perche' riguarda cosa e' lecito produrre, non come si
+    divide il campione."""
+    global _pool
+    if name not in VALUE_POOLS:
+        raise ValueError(f"pool sconosciuto: {name} (attesi: {', '.join(VALUE_POOLS)})")
+    _pool = VALUE_POOLS[name]
+
+
+def template_split(text, eval_percent=EVAL_PERCENT):
+    """'train' o 'eval' per un template, in modo STABILE.
+
+    Deciso dall'impronta del testo e non dalla posizione in elenco: la banca cresce a
+    ogni raccolta, quindi uno split per indice rimescolerebbe tutto e un template
+    finito in valutazione oggi potrebbe essere nel training domani — cioe' leakage
+    invisibile fra due esecuzioni."""
+    digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
+    return "eval" if int.from_bytes(digest, "big") % 100 < eval_percent else "train"
+
+
+def split_templates(templates, eval_percent=EVAL_PERCENT):
+    """Divide i template in (training, valutazione)."""
+    train = [t for t in templates if template_split(t, eval_percent) == "train"]
+    ev = [t for t in templates if template_split(t, eval_percent) == "eval"]
+    return train, ev
+
+
+# --------------------------------------------------------------------------- #
 # Etichettatura: lo stesso generatore serve le due modalita'                    #
 # --------------------------------------------------------------------------- #
 CYBER_LABELS = ("IP", "DOMAIN", "URL", "HASH", "MAC", "ASN", "WALLET",
@@ -156,7 +214,7 @@ def _addr_in(net_str):
 
 
 def _ipv4():
-    return _addr_in(random.choice(DOC_NETS_V4 + PRIVATE_NETS_V4))
+    return _addr_in(random.choice(_pool["v4"]))
 
 
 def _ipv6():
@@ -173,9 +231,9 @@ def _domain(hostile=False):
     """Dominio in spazio RFC 2606. hostile=True usa parole da phishing, ma il TLD
     resta documentale: la forma e' credibile, il dominio non esiste."""
     word = random.choice(_BAD_WORDS if hostile else _SUB_WORDS)
-    if random.random() < 0.35:
+    if random.random() < 0.35 and "example" in _pool["tld"]:
         return f"{word}.{random.choice(DOC_SLD)}"
-    return f"{word}.{random.choice(DOC_TLDS)}"
+    return f"{word}.{random.choice(_pool['tld'])}"
 
 
 def _hex(n):
@@ -213,7 +271,8 @@ def cidr_piece():
 
     L'offset si sorteggia invece di prendere net.subnets().next(): quello ritorna
     sempre la PRIMA sottorete, e il dataset conterrebbe solo 10.0.0.0/16."""
-    net = ipaddress.ip_network(random.choice(PRIVATE_NETS_V4))
+    privati = [n for n in _pool["v4"] if ipaddress.ip_network(n).is_private]
+    net = ipaddress.ip_network(random.choice(privati or PRIVATE_NETS_V4))
     prefix = random.choice((16, 20, 24))
     if prefix <= net.prefixlen:
         return [(str(net), _lab("IP"))]
@@ -248,7 +307,7 @@ def mac_piece():
 
 
 def asn_piece():
-    lo, hi = random.choice(DOC_ASN_RANGES)
+    lo, hi = random.choice(_pool["asn"])
     return [(f"AS{random.randint(lo, hi)}", _lab("ASN"))]
 
 
@@ -1050,6 +1109,10 @@ def main():
     ap.add_argument("--templates-only", action="store_true",
                     help="raccogli solo template nella banca, NON rigenerare il dataset "
                          "(altrimenti ogni giro di raccolta lo sovrascrive)")
+    ap.add_argument("--split", choices=("none", "train", "eval"), default="none",
+                    help="'train'/'eval' producono partizioni disgiunte PER TEMPLATE e "
+                         "PER VALORI: servono a misurare se il modello generalizza a "
+                         "strutture e a prefissi mai visti. 'none' (default) usa tutto")
     ap.add_argument("--cap-per-skeleton", type=int, default=DEFAULT_CAP_PER_SKELETON,
                     help=f"massimo di righe per scheletro, come il dataset 'clean' del "
                          f"progetto (default {DEFAULT_CAP_PER_SKELETON}; 0 = nessun cap)")
@@ -1085,6 +1148,15 @@ def main():
                   f"  Si prosegue con i {len(templates)} template gia' disponibili.\n")
 
     suffix = "cyberlabeled" if args.label_cyber else "plain"
+    if args.split != "none":
+        # template E valori disgiunti: le due separazioni misurano cose diverse
+        prima = len(templates)
+        train_t, eval_t = split_templates(templates)
+        templates = train_t if args.split == "train" else eval_t
+        set_value_pool(args.split)
+        print(f"Split '{args.split}': {len(templates)}/{prima} template, "
+              f"valori dagli intervalli '{args.split}'")
+        suffix += f"_{args.split}"
     out_path = Path(args.out) if args.out else OUT_DIR / f"synthetic_security_it_{suffix}.jsonl"
 
     print("=" * 70)
