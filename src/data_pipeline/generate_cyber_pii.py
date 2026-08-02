@@ -1039,6 +1039,56 @@ def dedupe(rows, cap=DEFAULT_CAP_PER_SKELETON):
                  "scheletri": len(per_skeleton)}
 
 
+def limit_tag_repeat(rows, max_repeat):
+    """Scarta le righe in cui UN tag si ripete piu' di max_repeat volte.
+
+    E' la leva che sposta davvero la distribuzione, perche' il nostro squilibrio non
+    e' diffuso ma concentrato: la densita' di DATE e' bimodale — la maggioranza delle
+    righe ne ha 0-3, ma una coda di timeline e log ne ha 7-9. Il budget greedy per tag
+    non la intacca (DATE e' in quasi ogni riga, quindi 'almeno un tag sotto budget' e'
+    quasi sempre vero); togliere la coda porta DATE dal 64% al 35%.
+
+    PREZZO DA SAPERE: quella coda E' il genere timeline, cioe' una parte di cio' che
+    il dataset dovrebbe insegnare. Si sta scambiando rappresentativita' del genere con
+    equilibrio delle etichette, e non e' un pasto gratis."""
+    if not max_repeat:
+        return rows
+    out = []
+    for rec in rows:
+        conteggio = collections.Counter(e["label"] for e in rec["entities"])
+        if conteggio and max(conteggio.values()) > max_repeat:
+            continue
+        out.append(rec)
+    return out
+
+
+def balance(rows, budget):
+    """Bilanciamento greedy con un budget di entita' per tag — passaggio 4 della
+    pipeline di pulizia del progetto, che avevamo saltato.
+
+    Una riga entra se contiene almeno un tag ancora sotto budget; se tutti i suoi tag
+    sono pieni, non aggiunge informazione e si scarta. Le entita' della riga tenuta
+    contano comunque, anche quelle dei tag gia' saturi: e' un budget, non una quota.
+
+    Serve perche' nel nostro training DATE e' il 64% delle entita' contro il 13% del
+    pool legale, e un fine-tuning cosi' sbilanciato sposta il modello verso le date a
+    spese di tutto il resto — misurato sulla sonda.
+
+    NON si tolgono etichette lasciando i valori nel testo: insegnerebbe al modello che
+    una data e' 'O', cioe' l'opposto di cio' che serve. Si scartano righe intere."""
+    if not budget:
+        return rows, {}
+    speso = collections.Counter()
+    out = []
+    for rec in rows:
+        tag = collections.Counter(e["label"] for e in rec["entities"])
+        if tag and all(speso[t] >= budget for t in tag):
+            continue
+        speso.update(tag)
+        out.append(rec)
+    return out, dict(speso)
+
+
 def validate_record(rec):
     """Controlli strutturali + invariante degli spazi documentali. None = valido."""
     if len(rec["tokens"]) != len(rec["bio_labels"]):
@@ -1117,6 +1167,14 @@ def main():
                     help="'train'/'eval' producono partizioni disgiunte PER TEMPLATE e "
                          "PER VALORI: servono a misurare se il modello generalizza a "
                          "strutture e a prefissi mai visti. 'none' (default) usa tutto")
+    ap.add_argument("--max-tag-repeat", type=int, default=0,
+                    help="scarta le righe in cui un tag si ripete piu' di N volte "
+                         "(0 = spento). Porta DATE dal 64%% al 35%% con N=2, al prezzo "
+                         "di perdere le righe di tipo timeline")
+    ap.add_argument("--tag-budget", type=int, default=0,
+                    help="bilanciamento greedy: massimo di entita' per tag (0 = spento). "
+                         "Serve perche' DATE e' il 64%% delle entita' del nostro training "
+                         "contro il 13%% del pool legale, e lo squilibrio sposta il modello")
     ap.add_argument("--cap-per-skeleton", type=int, default=DEFAULT_CAP_PER_SKELETON,
                     help=f"massimo di righe per scheletro, come il dataset 'clean' del "
                          f"progetto (default {DEFAULT_CAP_PER_SKELETON}; 0 = nessun cap)")
@@ -1184,6 +1242,15 @@ def main():
               f"{stat['duplicati_esatti']} duplicati esatti, "
               f"{stat['oltre_il_cap']} oltre il cap di {args.cap_per_skeleton} per "
               f"scheletro, {stat['scheletri']} scheletri distinti")
+    if args.max_tag_repeat:
+        prima = len(rows)
+        rows = limit_tag_repeat(rows, args.max_tag_repeat)
+        print(f"Densita' massima {args.max_tag_repeat} per tag: {prima} -> {len(rows)} righe")
+    if args.tag_budget:
+        prima = len(rows)
+        rows, speso = balance(rows, args.tag_budget)
+        print(f"Bilanciamento greedy (budget {args.tag_budget}/tag): "
+              f"{prima} -> {len(rows)} righe")
     counts = collections.Counter(e["label"] for r in rows for e in r["entities"])
 
     print(f"Righe valide: {len(rows)}. Entita' per label:")

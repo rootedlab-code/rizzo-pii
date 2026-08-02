@@ -169,14 +169,48 @@ piccola dell'addestramento vero.
 `TARGA` passa da 0.667 a 0.000 senza ripasso. E' dimenticanza catastrofica, e il
 ripasso 1:1 la riduce appena.
 
-Da provare, in quest'ordine, rimisurando ogni volta con la sonda:
+### RICETTA CHE PASSA LA SONDA (2026-08-02)
 
-1. `--rehearsal-ratio 3` o `4` — piu' dominio originale che nuovo
-2. `--lr 5e-6` invece di `2e-5`
-3. congelare gli strati bassi e addestrare solo la testa di classificazione
-4. **riequilibrare `DATE`**, che nel nostro training e' il **64.1%** delle entita'
-   contro il 13.5% del pool legale: da solo puo' spiegare buona parte dello
-   spostamento
+Due leve insieme, e servono entrambe:
+
+```bash
+python src/data_pipeline/generate_cyber_pii.py -n 30000 --split train \
+    --max-tag-repeat 2 --out dataset/synthetic/security_train_bilanciato.jsonl
+
+python src/training/finetune_security.py \
+    --train dataset/synthetic/security_train_bilanciato.jsonl \
+    --rehearsal dataset/subsets/train_subset_10k.jsonl --rehearsal-ratio 4 \
+    --out models/rizzo-pii-0.3B-security
+```
+
+| configurazione | legale recall | precision | F1 |
+|---|--:|--:|--:|
+| baseline (rilasciato) | 0.823 | 0.758 | 0.789 |
+| senza ripasso | 0.763 | 0.705 | 0.733 |
+| ripasso 1:1 | 0.771 | 0.709 | 0.739 |
+| ripasso 4:1 | 0.787 | 0.724 | 0.754 |
+| **ripasso 4:1 + `--max-tag-repeat 2`** | **0.822** | **0.763** | **0.791** |
+
+Il ripasso da solo non basta (si ferma a 0.787): serve anche riequilibrare `DATE`,
+che passa dal 64.1% al 38.8% delle entita'. Il perche' e' nella densita': non e' uno
+squilibrio diffuso ma una coda di righe di tipo timeline con 7-9 date ciascuna.
+
+**Il prezzo, da sapere:** quella coda *e'* il genere timeline, cioe' una parte di
+cio' che il dataset dovrebbe insegnare. Si scambia rappresentativita' con equilibrio.
+
+E il training funziona anche in avanti, misurato su 400 righe di sicurezza con
+**200 soli esempi** di addestramento (il vero run ne avra' 18.805):
+
+| | sicurezza recall | precision |
+|---|--:|--:|
+| rilasciato | 0.438 | 0.213 |
+| dopo | **0.533** | **0.360** |
+
+`DATE` da 0.075 a 0.245 con 200 esempi. Non e' ancora il livello dei detector
+(0.948), ma la direzione e' quella giusta e la scala e' 90 volte piu' piccola.
+
+Altre leve non ancora provate, se servissero: `--lr 5e-6`, congelare gli strati
+bassi, `--max-tag-repeat 1`.
 
 **Cautela sul campione:** la sonda usa 300 righe (634 entita'). Le differenze di
 cinque punti sono un segnale, non una misura di precisione. Prima di dichiarare
