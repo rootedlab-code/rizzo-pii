@@ -33,6 +33,7 @@ from flask import (Flask, jsonify, render_template_string, request,
 
 import detectors_cyber
 import policy
+import scope
 import server_config
 from transformers import pipeline
 
@@ -271,6 +272,19 @@ def known_tags():
 # In __main__ viene ricaricata con gli eventuali argomenti da riga di comando.
 POLICY = policy.load_policy(known_tags=known_tags())
 
+# Scope attivo: di chi e' ogni valore (env PII_SCOPE_FILE). Senza configurazione e'
+# vuoto, quindi ogni entita' e' 'unknown' e la policy la maschera: comportamento
+# storico invariato.
+#
+# Un file configurato ma rotto ferma l'avvio invece di degradare a scope vuoto: chi
+# ha indicato un percorso si aspetta quelle regole, e lavorare su un ingaggio intero
+# credendole attive e' peggio che non partire.
+try:
+    SCOPE = scope.load_scope()
+except scope.ScopeError as _exc:
+    print(f"ERRORE nel file di scope: {_exc}", file=sys.stderr)
+    raise SystemExit(1)
+
 
 def detect_regex(text):
     """Entita' della rete regex. validated=True solo quando il checksum passa."""
@@ -377,9 +391,14 @@ def analyze(text):
     counters, seen, mapping = {}, {}, {}
     for e in kept:
         val = text[e["start"]:e["end"]]
-        e["action"] = POLICY.action(e["label"])
+        # Chi e' il proprietario del valore -> cosa farne. Il ruolo si calcola sul testo
+        # completo con gli offset dell'entita': il contesto sta nella frase, non nel valore.
+        match = SCOPE.role_of(e["label"], val, text, e["start"], e["end"])
+        e["role"], e["role_source"] = match.role, match.source
+        decision = POLICY.decide(e["label"], match.role)
+        e["action"] = decision.action
         if e["action"] == policy.ACTION_KEEP:
-            e["preservation_reason"] = policy.REASON_CONFIG
+            e["preservation_reason"] = decision.reason
             continue
         key = (e["label"], _norm(val))
         if key in seen:
@@ -392,7 +411,7 @@ def analyze(text):
             e["ph"] = ph
 
     # segmenti per la preview + testo anonimizzato + statistiche
-    segments, anon, by_label, by_source, pos = [], [], {}, {}, 0
+    segments, anon, by_label, by_source, by_role, pos = [], [], {}, {}, {}, 0
     n_kept = 0
     for e in kept:
         val = text[e["start"]:e["end"]]
@@ -406,6 +425,8 @@ def analyze(text):
             "src": e["source"],
             "validated": e["validated"],
             "action": e["action"],
+            "role": e["role"],
+            "role_source": e["role_source"],
         }
         if e["action"] == policy.ACTION_KEEP:
             seg["preservation_reason"] = e["preservation_reason"]
@@ -416,6 +437,7 @@ def analyze(text):
         segments.append(seg)
         by_label[e["label"]] = by_label.get(e["label"], 0) + 1
         by_source[e["source"]] = by_source.get(e["source"], 0) + 1
+        by_role[e["role"]] = by_role.get(e["role"], 0) + 1
         pos = e["end"]
     if pos < len(text):
         segments.append({"t": text[pos:]})
@@ -431,8 +453,12 @@ def analyze(text):
         "n_kept": n_kept,
         "n_unique": len(mapping),
         "policy": POLICY.as_dict(),
+        # conteggi, mai i valori: il file di scope contiene gli indirizzi del cliente
+        # e gli indicatori dell'avversario e non deve uscire nemmeno da qui.
+        "scope": SCOPE.as_dict(),
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
+        "by_role": by_role,
     }
 
 
