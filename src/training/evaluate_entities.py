@@ -67,8 +67,13 @@ def normalize_entities(entities, text, apply_map=True):
     entita' separate nel dato grezzo, con uno spazio non etichettato in mezzo, e il
     modello ne produce una sola — 'Mario Rossi' (FULLNAME). Senza fondere, lo span non
     coincide e l'entita' risulta mancata."""
+    # Ordinamento TOTALE, non solo per start: gli Entity arrivano da un set, e
+    # l'ordine di iterazione di un set di namedtuple con dentro una stringa dipende
+    # dall'hash, che Python randomizza a ogni processo. Con la chiave parziale i pari
+    # merito si risolvevano in modo diverso a ogni esecuzione e la stessa misura dava
+    # 0.817, 0.819, 0.822 sullo stesso identico file.
     out = []
-    for e in sorted(entities, key=lambda x: x.start):
+    for e in sorted(entities, key=lambda x: (x.start, x.end, x.label)):
         label = TAG_MAP.get(e.label, e.label) if apply_map else e.label
         if label in DROP_TYPES:
             continue
@@ -149,7 +154,7 @@ def combined_entities(text, model_entities, labels=None, packs=("cyber",)):
     dalla regex sostituisce lo span troncato del modello invece di affiancarlo."""
     cands = [{"start": e.start, "end": e.end, "label": e.label,
               "score": 1.0, "source": "modello", "validated": False}
-             for e in model_entities]
+             for e in sorted(model_entities, key=lambda x: (x.start, x.end, x.label))]
     cands += _regex_candidates(text, packs)
     merged = _load_app()._merge(cands, text)
     return {Entity(c["start"], c["end"], c["label"]) for c in merged

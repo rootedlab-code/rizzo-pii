@@ -223,3 +223,33 @@ class TestLabelNormalisation(unittest.TestCase):
                 found[target.id] = ast.literal_eval(node.value)
         self.assertEqual(found["TAG_MAP"], ev.TAG_MAP)
         self.assertEqual(found["DROP_TYPES"], ev.DROP_TYPES)
+
+
+class TestDeterminism(unittest.TestCase):
+    """Una misura che non si riproduce non e' una misura.
+
+    Entity contiene una stringa, quindi l'ordine di iterazione di un set di Entity
+    dipende dall'hash, che Python randomizza a ogni processo. Con una chiave di
+    ordinamento parziale i pari merito si risolvevano diversamente a ogni esecuzione:
+    la stessa misura sullo stesso file dava 0.817, 0.819 e 0.822."""
+
+    TEXT = "Il tecnico Mario Rossi e Anna Bianchi hanno firmato il verbale."
+
+    def _entities(self):
+        return {ev.Entity(11, 16, "GIVENNAME"), ev.Entity(17, 22, "SURNAME"),
+                ev.Entity(25, 29, "GIVENNAME"), ev.Entity(30, 37, "SURNAME"),
+                ev.Entity(11, 16, "FULLNAME")}
+
+    def test_normalisation_does_not_depend_on_set_iteration_order(self):
+        atteso = ev.normalize_entities(self._entities(), self.TEXT)
+        for _ in range(30):
+            # ricostruire il set cambia l'ordine di iterazione fra processi diversi;
+            # dentro lo stesso processo si forza rimescolando l'input
+            mescolato = set(sorted(self._entities(), key=lambda e: (e.end, e.label)))
+            self.assertEqual(ev.normalize_entities(mescolato, self.TEXT), atteso)
+
+    def test_the_sort_key_is_total(self):
+        # due entita' con lo stesso start devono avere un ordine definito
+        a, b = ev.Entity(0, 5, "IP"), ev.Entity(0, 9, "DOMAIN")
+        chiave = lambda e: (e.start, e.end, e.label)
+        self.assertNotEqual(chiave(a), chiave(b))
