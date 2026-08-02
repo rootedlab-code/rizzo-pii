@@ -165,10 +165,10 @@ class TestCallerSelection(ProviderTestCase):
     def test_llm_templates_stops_after_repeated_failures(self):
         NEXT.update(status=500, body={"error": "boom"})
         call = cy.make_caller("openai", self.base, "modello-finto")
-        self.assertEqual(cy.llm_templates(3, call, "finto"), [])
+        self.assertEqual(cy.llm_templates(3, call, "finto", bank_path=None), [])
 
     def test_llm_templates_without_a_caller_returns_nothing(self):
-        self.assertEqual(cy.llm_templates(2, None), [])
+        self.assertEqual(cy.llm_templates(2, None, bank_path=None), [])
 
 
 if __name__ == "__main__":

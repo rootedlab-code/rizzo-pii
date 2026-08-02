@@ -669,8 +669,13 @@ def make_caller(provider, base_url=None, model=None):
     return lambda p: openai_compat_call(p, base_url, model, key)
 
 
-def llm_templates(per_type, call, label="modello"):
-    """Fa scrivere nuovi template di genere sicurezza. [] se il provider non risponde."""
+def llm_templates(per_type, call, label="modello", bank_path=BANK_PATH):
+    """Fa scrivere nuovi template di genere sicurezza. [] se il provider non risponde.
+
+    Ogni template accettato finisce SUBITO nella banca, non a fine giro: le chiamate
+    costano tempo e credito, e un'interruzione (timeout, Ctrl-C, rete) non deve
+    buttare via cio' che era gia' stato pagato. Con bank_path=None non si salva —
+    serve ai test, che non devono scrivere nella banca vera."""
     if call is None:
         return []
     slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
@@ -696,6 +701,8 @@ def llm_templates(per_type, call, label="modello"):
                 if text:
                     out.append(text)
                     esito = "OK"
+                    if bank_path is not None:
+                        save_bank([text], bank_path)      # subito, non a fine giro
                 else:
                     refused += 1
                     esito = "scartato"
@@ -847,8 +854,10 @@ def main():
         new = [t for t in llm_templates(args.per_type, caller, label)
                if t not in templates]
         if new:
-            added, total = save_bank(new)
-            print(f"Banca aggiornata: +{added} template (totale {total}) -> {BANK_PATH}")
+            # llm_templates ha gia' salvato ognuno appena accettato: qui si riporta
+            # solo il totale, senza riscrivere.
+            print(f"Banca: +{len(new)} template nuovi (totale {len(load_bank())}) "
+                  f"-> {BANK_PATH}")
             templates += new
         else:
             # senza questo, quota esaurita o chiave assente producevano in silenzio un
