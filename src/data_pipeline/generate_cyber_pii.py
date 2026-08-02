@@ -76,6 +76,10 @@ _REAL_TLDS = {t.lower() for t in detectors_cyber.TLDS}
 OUT_DIR = ROOT / "dataset" / "synthetic"
 GENERATOR_VERSION = "1.0.0"
 
+# Dopo tante chiamate fallite di fila si smette. Il 429 di quota non e' transitorio:
+# insistere non lo risolve e consuma quello che resta.
+MAX_CONSECUTIVE_FAILURES = 3
+
 # --------------------------------------------------------------------------- #
 # Spazi documentali — l'invariante di sicurezza di questo modulo                #
 # --------------------------------------------------------------------------- #
@@ -551,18 +555,42 @@ def gemini_templates(per_type):
         return []
     import llm_template_bank as tb
     slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
-    out, total, done = [], len(DOC_TYPES) * per_type, 0
+    out, total, done, refused, no_answer, streak = [], len(DOC_TYPES) * per_type, 0, 0, 0, 0
     print(f"Scrivo {total} template con Gemini [{tb.MODEL}] ...")
     for doc_type in DOC_TYPES:
         for _ in range(per_type):
+            if streak >= MAX_CONSECUTIVE_FAILURES:
+                break
             done += 1
-            text = clean_and_validate(tb.call_gemini(
-                PROMPT.format(doc_type=doc_type, slot_list=slot_list,
-                              slot_hints=SLOT_HINTS)))
-            if text:
-                out.append(text)
-            print(f"  [{done:>3}/{total}] {doc_type:52s} {'OK' if text else 'scartato'}")
-    print(f"Template nuovi validi: {len(out)}/{total}")
+            # "nessuna risposta" e "template rifiutato" sono due esiti diversi e vanno
+            # detti diversamente: confonderli fa sembrare un problema di quota un
+            # problema di qualita' dei template, e si va a cercare nel posto sbagliato.
+            raw = tb.call_gemini(PROMPT.format(doc_type=doc_type, slot_list=slot_list,
+                                               slot_hints=SLOT_HINTS), retries=1)
+            if raw is None:
+                no_answer += 1
+                streak += 1
+                esito = "nessuna risposta dal modello"
+            else:
+                streak = 0
+                text = clean_and_validate(raw)
+                if text:
+                    out.append(text)
+                    esito = "OK"
+                else:
+                    refused += 1
+                    esito = "scartato"
+            print(f"  [{done:>3}/{total}] {doc_type:52s} {esito}")
+        if streak >= MAX_CONSECUTIVE_FAILURES:
+            break
+
+    if streak >= MAX_CONSECUTIVE_FAILURES:
+        # senza questo si bruciava l'intera quota a ritentare, e ogni tentativo la
+        # riduce ancora: il 429 non e' un errore transitorio da cui si esce insistendo
+        print(f"\nInterrotto dopo {streak} chiamate fallite di fila: il modello non "
+              f"risponde (quota, chiave o rete). Non insisto: ogni tentativo consuma.")
+    print(f"Template nuovi validi: {len(out)}/{done} tentati "
+          f"({refused} rifiutati dai controlli, {no_answer} senza risposta)")
     return out
 
 
