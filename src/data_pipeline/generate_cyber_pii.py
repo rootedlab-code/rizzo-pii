@@ -302,7 +302,39 @@ def cve_piece():
     return [(f"CVE-{random.randint(2019, 2026)}-{random.randint(1000, 49999)}", None)]
 
 
+# Date di un documento di sicurezza. Il generatore di monte usa
+# random.randint(1955, 2005) — un intervallo da DATA DI NASCITA, giusto per un atto
+# legale e assurdo per un verbale di incidente ("l'attacco e' avvenuto il
+# 25/05/1967"). Misurato prima della correzione: su 4002 date generate, ZERO dal 2024
+# in poi e nessuna oltre il 2005. DATE e' l'etichetta piu' frequente del nostro
+# dataset, quindi non era un caso limite: era il segnale dominante, ed era sbagliato.
+#
+# Qui si aggiunge anche la varieta' di formato che i documenti tecnici hanno davvero:
+# la data ISO e il timestamp convivono con quella all'italiana nello stesso report.
+RECENT_YEARS = (2024, 2025, 2026)
+_MESI = ("gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+         "agosto", "settembre", "ottobre", "novembre", "dicembre")
+
+
+def recent_date_piece():
+    """DATE plausibile per un documento di sicurezza, in uno dei formati in uso."""
+    y = random.choice(RECENT_YEARS)
+    m, d = random.randint(1, 12), random.randint(1, 28)
+    style = random.random()
+    if style < 0.40:
+        value = f"{d:02d}/{m:02d}/{y}"
+    elif style < 0.70:
+        value = f"{y}-{m:02d}-{d:02d}"
+    elif style < 0.85:
+        value = f"{d} {_MESI[m - 1]} {y}"
+    else:
+        value = f"{y}-{m:02d}-{d:02d} {random.randint(0, 23):02d}:{random.randint(0, 59):02d}"
+    return [(value, "DATE")]
+
+
 SLOTS = {
+    # sovrascrive il generatore di monte: vedi il commento qui sopra
+    "DATE": recent_date_piece,
     "IPADDR": ip_piece, "IPV6": ip6_piece, "CIDR": cidr_piece,
     "DOMAIN": domain_piece, "BADDOMAIN": bad_domain_piece, "URL": url_piece,
     "HASH": hash_piece, "MAC": mac_piece, "ASN": asn_piece, "WALLET": wallet_piece,

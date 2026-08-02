@@ -358,3 +358,29 @@ class TestDetectorsSeeWhatWeGenerate(GeneratorTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDates(GeneratorTestCase):
+    """Le date di un documento di sicurezza non sono date di nascita.
+
+    Il generatore di monte usa randint(1955, 2005): misurato prima della correzione,
+    su 4002 date generate nessuna cadeva oltre il 2005 — e DATE e' l'etichetta piu'
+    frequente del nostro dataset, quindi era il segnale dominante ed era sbagliato."""
+
+    def test_every_generated_date_is_recent(self):
+        for _ in range(SAMPLES):
+            value = cy.recent_date_piece()[0][0]
+            year = int(re.search(r"\b(20\d{2})\b", value).group())
+            self.assertIn(year, cy.RECENT_YEARS, value)
+
+    def test_the_slot_overrides_the_upstream_generator(self):
+        cy.register()
+        self.assertIs(gen.SLOTS["DATE"], cy.recent_date_piece)
+
+    def test_several_formats_are_produced(self):
+        seen = {cy.recent_date_piece()[0][0] for _ in range(SAMPLES)}
+        self.assertGreater(len({("ora" if ":" in v else "iso" if "-" in v else
+                                 "esteso" if " " in v else "slash") for v in seen}), 2)
+
+    def test_the_label_is_still_DATE(self):
+        self.assertEqual(cy.recent_date_piece()[0][1], "DATE")
