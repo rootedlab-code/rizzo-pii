@@ -594,15 +594,88 @@ def save_bank(templates, path=BANK_PATH):
     return added, len(merged)
 
 
-def gemini_templates(per_type):
-    """Fa scrivere a Gemini nuovi template di genere sicurezza. [] senza chiave."""
+# --------------------------------------------------------------------------- #
+# Provider: qualunque endpoint OpenAI-compatible                                #
+# --------------------------------------------------------------------------- #
+# Un solo formato copre il modello locale (ollama espone /v1/chat/completions) e
+# ogni servizio cloud che parla la stessa API. La scelta del provider diventa
+# configurazione, non codice.
+#
+# I controlli restano il cancello: clean_and_validate rifiuta i segnaposto
+# sconosciuti, i nomi inline e i valori letterali fuori dagli spazi documentali.
+# Un modello piu' debole quindi non produce dati sbagliati, produce solo un tasso
+# di accettazione piu' basso — la qualita' del provider e' una questione di resa,
+# non di correttezza.
+DEFAULT_LLM_BASE_URL = "http://127.0.0.1:11434/v1"     # ollama in locale
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def openai_compat_call(prompt, base_url, model, api_key=None, timeout=300,
+                       temperature=1.0, max_tokens=1200):
+    """Una chiamata a un endpoint OpenAI-compatible. None se fallisce.
+
+    Toglie gli eventuali blocchi <think>: i modelli locali con ragionamento esplicito
+    (Qwen3 e simili) li antepongono alla risposta, e finirebbero nel template."""
+    import urllib.error
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        with urllib.request.urlopen(
+                urllib.request.Request(url, data=payload, headers=headers),
+                timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        print(f"  errore dal provider: {exc}")
+        return None
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        print(f"  risposta inattesa dal provider: {str(data)[:160]}")
+        return None
+    return _THINK_RE.sub("", text or "").strip() or None
+
+
+def make_caller(provider, base_url=None, model=None):
+    """Ritorna la funzione prompt -> testo|None per il provider scelto.
+
+    Astrae l'UNICA cosa che cambia fra i provider — come si ottiene del testo da un
+    prompt — lasciando identici il resto del giro: prompt, validazione, banca."""
     import os
-    if not os.environ.get("GEMINI_API_KEY"):
-        print("GEMINI_API_KEY non impostata: uso i soli template scritti a mano.")
+    if provider == "gemini":
+        if not os.environ.get("GEMINI_API_KEY"):
+            print("GEMINI_API_KEY non impostata.")
+            return None
+        return lambda p: tb.call_gemini(p, retries=1)
+
+    base_url = base_url or os.environ.get("PII_LLM_BASE_URL") or DEFAULT_LLM_BASE_URL
+    model = model or os.environ.get("PII_LLM_MODEL")
+    if not model:
+        print("Nessun modello indicato: usa --llm-model o PII_LLM_MODEL.")
+        return None
+    key = os.environ.get("PII_LLM_KEY")
+    print(f"Provider OpenAI-compatible: {base_url} [{model}]"
+          + ("" if key else "  (senza chiave: endpoint locale)"))
+    return lambda p: openai_compat_call(p, base_url, model, key)
+
+
+def llm_templates(per_type, call, label="modello"):
+    """Fa scrivere nuovi template di genere sicurezza. [] se il provider non risponde."""
+    if call is None:
         return []
     slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
     out, total, done, refused, no_answer, streak = [], len(DOC_TYPES) * per_type, 0, 0, 0, 0
-    print(f"Scrivo {total} template con Gemini [{tb.MODEL}] ...")
+    print(f"Scrivo {total} template con {label} ...")
     for doc_type in DOC_TYPES:
         for _ in range(per_type):
             if streak >= MAX_CONSECUTIVE_FAILURES:
@@ -611,8 +684,8 @@ def gemini_templates(per_type):
             # "nessuna risposta" e "template rifiutato" sono due esiti diversi e vanno
             # detti diversamente: confonderli fa sembrare un problema di quota un
             # problema di qualita' dei template, e si va a cercare nel posto sbagliato.
-            raw = tb.call_gemini(PROMPT.format(doc_type=doc_type, slot_list=slot_list,
-                                               slot_hints=SLOT_HINTS), retries=1)
+            raw = call(PROMPT.format(doc_type=doc_type, slot_list=slot_list,
+                                     slot_hints=SLOT_HINTS))
             if raw is None:
                 no_answer += 1
                 streak += 1
@@ -634,7 +707,8 @@ def gemini_templates(per_type):
         # senza questo si bruciava l'intera quota a ritentare, e ogni tentativo la
         # riduce ancora: il 429 non e' un errore transitorio da cui si esce insistendo
         print(f"\nInterrotto dopo {streak} chiamate fallite di fila: il modello non "
-              f"risponde (quota, chiave o rete). Non insisto: ogni tentativo consuma.")
+              f"risponde (quota, chiave, modello o rete). Non insisto: se e' quota, "
+              f"ogni tentativo consuma quello che resta.")
     print(f"Template nuovi validi: {len(out)}/{done} tentati "
           f"({refused} rifiutati dai controlli, {no_answer} senza risposta)")
     return out
@@ -741,9 +815,19 @@ def main():
                     help="etichetta anche i valori cyber (CAMBIA num_labels: impone "
                          "il riaddestramento completo, checkpoint attuale incompatibile)")
     ap.add_argument("--gemini", action="store_true",
-                    help="chiedi a Gemini template nuovi (richiede GEMINI_API_KEY)")
+                    help="scorciatoia per --provider gemini")
+    ap.add_argument("--provider", choices=("gemini", "openai"), default=None,
+                    help="da chi far scrivere i template nuovi. 'gemini' usa "
+                         "GEMINI_API_KEY; 'openai' un qualunque endpoint "
+                         "OpenAI-compatible (ollama in locale, Groq, Cerebras, "
+                         "OpenRouter, Together, Mistral, GitHub Models...)")
+    ap.add_argument("--llm-base-url", default=None,
+                    help=f"URL base OpenAI-compatible (default {DEFAULT_LLM_BASE_URL}, "
+                         f"anche via PII_LLM_BASE_URL)")
+    ap.add_argument("--llm-model", default=None,
+                    help="nome del modello per --provider openai (anche PII_LLM_MODEL)")
     ap.add_argument("--per-type", type=int, default=2,
-                    help="quanti template per tipo di documento chiedere a Gemini")
+                    help="quanti template per tipo di documento chiedere al modello")
     args = ap.parse_args()
 
     set_label_cyber(args.label_cyber)
@@ -756,8 +840,12 @@ def main():
         print(f"Banca template: {len(banked)} da esecuzioni precedenti")
         templates += banked
 
-    if args.gemini:
-        new = [t for t in gemini_templates(args.per_type) if t not in templates]
+    provider = args.provider or ("gemini" if args.gemini else None)
+    if provider:
+        label = f"Gemini [{tb.MODEL}]" if provider == "gemini" else "il provider configurato"
+        caller = make_caller(provider, args.llm_base_url, args.llm_model)
+        new = [t for t in llm_templates(args.per_type, caller, label)
+               if t not in templates]
         if new:
             added, total = save_bank(new)
             print(f"Banca aggiornata: +{added} template (totale {total}) -> {BANK_PATH}")
@@ -765,7 +853,8 @@ def main():
         else:
             # senza questo, quota esaurita o chiave assente producevano in silenzio un
             # dataset con la sola varieta' gia' disponibile
-            print("\nATTENZIONE: nessun template NUOVO da Gemini (quota, chiave o rete).\n"
+            print("\nATTENZIONE: nessun template NUOVO dal provider "
+                  "(quota, chiave, modello o rete).\n"
                   f"  Si prosegue con i {len(templates)} template gia' disponibili.\n")
 
     suffix = "cyberlabeled" if args.label_cyber else "plain"

@@ -63,7 +63,27 @@ intercetta `"Sig. Bianchi"` — il modo normale di scrivere un titolo — perch�
 (`if a[-1] in ".:;!?": continue`) scatta prima del controllo sui titoli. Coperto nel nostro modulo,
 file upstream non toccato.
 
-32 test nuovi, 183 in totale. Nessun impatto sul training finché il dataset non viene incluso.
+**Il provider è configurazione, non codice.** `--provider openai` parla con un qualunque endpoint
+OpenAI-compatible: `ollama` in locale, oppure Groq, Cerebras, OpenRouter, Together, Mistral. Un
+solo adattatore, base URL e modello da `--llm-base-url`/`--llm-model` o da
+`PII_LLM_BASE_URL`/`PII_LLM_MODEL`/`PII_LLM_KEY`. Serve perché il limite gratuito di Gemini è di
+**20 richieste al giorno per progetto e per modello**, verificato leggendo la `QuotaFailure`
+dell'errore 429 — e un abbonamento consumer non lo cambia, perché l'API fattura tramite il progetto
+Cloud della chiave.
+
+Questo si può fare senza rischi solo perché **i controlli sono il cancello, non il modello**:
+`clean_and_validate` rifiuta i segnaposto sconosciuti, i nomi inline e i valori letterali fuori
+dagli spazi documentali. Un modello più debole quindi non produce dati sbagliati, produce solo un
+tasso di accettazione più basso — la qualità del provider è una questione di **resa**, non di
+correttezza.
+
+L'adattatore toglie i blocchi `<think>`: i modelli locali con ragionamento esplicito li antepongono
+alla risposta e finirebbero dentro il template. I test girano contro un server HTTP **finto** nel
+processo di test — nessun modello caricato, nessuna rete, nessuna quota, nessun carico sulla
+macchina — il che permette anche di provare risposte malformate ed errori, che con un provider vero
+non si sanno riprodurre.
+
+50 test nuovi, 201 in totale. Nessun impatto sul training finché il dataset non viene incluso.
 
 ---
 
