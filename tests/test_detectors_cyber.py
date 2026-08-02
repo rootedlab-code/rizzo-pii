@@ -233,3 +233,44 @@ class TestIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDate(unittest.TestCase):
+    """DATE non era coperta da NESSUN detector, ne' nel core ne' altrove: dipendeva
+    solo dal modello, che e' addestrato su date 1955-2005 e su '24/01/2024' tagga
+    '24/01/20'. Misurato sull'insieme di valutazione: recall 0.200 sul formato
+    all'italiana, 0.000 sull'ISO, 0.002 sull'esteso. In un documento di sicurezza,
+    dove la data e' quasi sempre ISO o con timestamp, significava lasciarla in chiaro."""
+
+    def test_iso_dates_are_found(self):
+        self.assertEqual(find("DATE", "rilevato il 2026-10-14 alle prime ore"),
+                         ["2026-10-14"])
+
+    def test_iso_with_time_is_one_entity(self):
+        self.assertEqual(find("DATE", "evento 2026-10-14 17:48 registrato"),
+                         ["2026-10-14 17:48"])
+        self.assertEqual(find("DATE", "evento 2026-10-14T17:48:12 registrato"),
+                         ["2026-10-14T17:48:12"])
+
+    def test_italian_format_keeps_the_whole_year(self):
+        # il modello si ferma a '24/01/20': la regex no
+        self.assertEqual(find("DATE", "in data 24/01/2024 il tecnico"), ["24/01/2024"])
+        self.assertEqual(find("DATE", "in data 24-01-2024 il tecnico"), ["24-01-2024"])
+
+    def test_extended_italian_dates_are_found(self):
+        self.assertEqual(find("DATE", "il 9 ottobre 2025 si e' chiuso"),
+                         ["9 ottobre 2025"])
+
+    def test_impossible_dates_are_refused(self):
+        self.assertEqual(find("DATE", "scadenza 31/02/2024 indicata"), [])
+        self.assertEqual(find("DATE", "scadenza 2024-13-01 indicata"), [])
+
+    def test_addresses_and_versions_are_not_dates(self):
+        for benign in ("il server 203.0.113.5 risponde",
+                       "la rete 10.0.0.0/8 interna",
+                       "versione 1.2.3 del programma",
+                       "porta 8080/tcp aperta"):
+            self.assertEqual(find("DATE", benign), [], benign)
+
+    def test_a_year_out_of_range_is_refused(self):
+        self.assertEqual(find("DATE", "anno 12/05/1499 remoto"), [])

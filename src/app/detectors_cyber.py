@@ -138,7 +138,69 @@ _LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
 # --------------------------------------------------------------------------- #
 # Detector (stessa forma delle voci di DETECTORS in app.py)
 # --------------------------------------------------------------------------- #
-DETECTORS = [
+# --------------------------------------------------------------------------- #
+# Date — la lacuna piu' grave della rete regex                                  #
+# --------------------------------------------------------------------------- #
+# DATE non e' coperta da NESSUN detector, ne' nel core ne' altrove: dipende solo
+# dal modello. E il modello rilasciato e' addestrato su date 1955-2005, quindi non
+# ha mai visto un anno che cominci per 202 e TRONCA — misurato sul nostro insieme
+# di valutazione: su '24/01/2024' tagga '24/01/20', recall 0.200 sul formato
+# all'italiana, 0.000 sull'ISO, 0.002 sull'esteso. In un documento di sicurezza,
+# dove la data e' quasi sempre ISO o con timestamp, questo significa lasciarla in
+# chiaro.
+#
+# Qui e' deterministica e validata sul calendario, quindi in _merge() vince sullo
+# span troncato del modello.
+MESI_IT = ("gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+           "agosto", "settembre", "ottobre", "novembre", "dicembre")
+_MESI_ALT = "|".join(MESI_IT)
+
+
+def date_ok(value):
+    """Vera se e' una data di calendario esistente. Scarta 31/02 e i falsi positivi
+    numerici che hanno la forma giusta ma non sono date."""
+    import datetime
+    v = value.strip()
+    m = re.match(rf"^(\d{{1,2}})\s+({_MESI_ALT})\s+(\d{{4}})$", v, re.IGNORECASE)
+    if m:
+        d, mese, y = int(m.group(1)), MESI_IT.index(m.group(2).lower()) + 1, int(m.group(3))
+    else:
+        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", v)
+        if m:
+            y, mese, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            m = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$", v)
+            if not m:
+                return False
+            d, mese, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not 1900 <= y <= 2099:
+        return False
+    try:
+        datetime.date(y, mese, d)
+    except ValueError:
+        return False
+    return True
+
+
+DATE_DETECTORS = [
+    # ISO, con ora facoltativa: 2026-10-14 oppure 2026-10-14 17:48(:12)
+    ("DATE",
+     re.compile(r"(?<![\d-])\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?![\d-])"),
+     date_ok, True),
+
+    # all'italiana: 24/01/2026, 24-01-2026, 24.01.2026
+    ("DATE",
+     re.compile(r"(?<![\d/.-])\d{1,2}[/.-]\d{1,2}[/.-]\d{4}(?![\d/.-])"),
+     date_ok, True),
+
+    # esteso: 9 ottobre 2025
+    ("DATE",
+     re.compile(rf"(?<!\w)\d{{1,2}}\s+(?:{_MESI_ALT})\s+\d{{4}}(?!\w)", re.IGNORECASE),
+     date_ok, True),
+]
+
+
+DETECTORS = DATE_DETECTORS + [
     # URL prima del dominio: e' lo span piu' lungo e validato, quindi vince il merge.
     ("URL",
      re.compile(rf"(?<![\w@])(?:h[xt]{{2}}ps?|ftps?|wss?){COLON}//{TAIL}"),

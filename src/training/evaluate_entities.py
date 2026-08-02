@@ -126,6 +126,27 @@ def detector_entities(text, labels=None, merge=True):
             if not labels or c["label"] in labels}
 
 
+def combined_entities(text, model_entities, labels=None):
+    """Modello + rete regex, fusi come fa analyze(): e' cio' che gira davvero.
+
+    Misurare il solo modello dice quanto e' bravo il modello; misurare le sole regex
+    dice quanto sono brave le regex. Nessuno dei due e' il prodotto. E la differenza
+    non e' piccola: a pari span vince quello validato, quindi una data riconosciuta
+    dalla regex sostituisce lo span troncato del modello invece di affiancarlo."""
+    cands = [{"start": e.start, "end": e.end, "label": e.label,
+              "score": 1.0, "source": "modello", "validated": False}
+             for e in model_entities]
+    for label, rx, validator, _strict in detectors_cyber.DETECTORS:
+        for m in rx.finditer(text):
+            ok = validator is None or validator(m.group())
+            if ok:
+                cands.append({"start": m.start(), "end": m.end(), "label": label,
+                              "score": 1.0, "source": "regex", "validated": ok})
+    merged = _load_app()._merge(cands, text)
+    return {Entity(c["start"], c["end"], c["label"]) for c in merged
+            if not labels or c["label"] in labels}
+
+
 def score(pairs):
     """(gold, pred) per riga -> statistiche per label e micro-media.
 
@@ -179,6 +200,9 @@ def main():
                          "senza questo si valuta la rete regex")
     ap.add_argument("--labels", default=None,
                     help="limita ai soli tag indicati, es. \"IP,DOMAIN,HASH\"")
+    ap.add_argument("--with-detectors", action="store_true",
+                    help="fonde le predizioni con la rete regex, come fa analyze(): "
+                         "e' la misura del PRODOTTO, non di una sua meta'")
     ap.add_argument("--normalize", action="store_true",
                     help="applica TAG_MAP e fonde le entita' adiacenti, come fa il "
                          "training al caricamento. SERVE per confrontarsi con un "
@@ -200,10 +224,18 @@ def main():
         for g, p in zip(gold_rows, pred_rows):
             if g["source_text"] != p["source_text"]:
                 sys.exit("ERRORE: i due file non contengono gli stessi testi")
-        pairs = [(keep(entities_of(g, args.normalize)),
-                  keep(entities_of(p, args.normalize)))
-                 for g, p in zip(gold_rows, pred_rows)]
-        report(score(pairs), f"Predizioni da {args.pred}")
+        if args.with_detectors:
+            pairs = [(keep(entities_of(g, args.normalize)),
+                      keep(combined_entities(g["source_text"],
+                                             entities_of(p, args.normalize), labels)))
+                     for g, p in zip(gold_rows, pred_rows)]
+            titolo = f"Modello ({args.pred}) + rete regex, fusi come nell'app"
+        else:
+            pairs = [(keep(entities_of(g, args.normalize)),
+                      keep(entities_of(p, args.normalize)))
+                     for g, p in zip(gold_rows, pred_rows)]
+            titolo = f"Solo modello, da {args.pred}"
+        report(score(pairs), titolo)
     else:
         pairs = [(keep(entities_of(g, args.normalize)),
                   keep(detector_entities(g["source_text"], labels)))
