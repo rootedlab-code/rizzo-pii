@@ -18,6 +18,8 @@ Solo stdlib: nessun modello, nessuna rete.
 """
 
 import ipaddress
+import json
+import tempfile
 import re
 import sys
 import unittest
@@ -187,6 +189,57 @@ class TestStrayNameGuard(GeneratorTestCase):
 
     def test_a_placeholder_is_never_taken_for_a_name(self):
         self.assertFalse(self._rejected("Riferimento: {FULLNAME} di {ORG}"))
+
+
+class TestTemplateBank(GeneratorTestCase):
+    """La banca su disco e' cio' che rende utile una quota giornaliera piccola:
+    senza, i template ottenuti oggi si buttano a fine esecuzione."""
+
+    GOOD = ("Il {DATE} l'analista {FULLNAME} di {ORG} ha isolato "
+            "l'host {HOSTNAME} ({IPADDR}).")
+    WITH_NAME = "Il perito Mario Rossi ha verificato l'host {HOSTNAME}."
+    WITH_LITERAL = "Il server {HOSTNAME} contatta 8.8.8.8, riferisce {FULLNAME}."
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "bank.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def test_round_trip(self):
+        self.assertEqual(cy.save_bank([self.GOOD], self.path), (1, 1))
+        self.assertEqual(cy.load_bank(self.path), [self.GOOD])
+
+    def test_duplicates_are_not_added_twice(self):
+        cy.save_bank([self.GOOD], self.path)
+        self.assertEqual(cy.save_bank([self.GOOD], self.path), (0, 1))
+
+    def test_saving_accumulates_across_runs(self):
+        other = "Ticket aperto da {FULLNAME} il {DATE} sull'host {HOSTNAME}."
+        cy.save_bank([self.GOOD], self.path)
+        self.assertEqual(cy.save_bank([other], self.path), (1, 2))
+        self.assertEqual(len(cy.load_bank(self.path)), 2)
+
+    def test_banked_templates_are_revalidated_on_load(self):
+        # la banca sopravvive alle correzioni del codice: cio' che passava ieri va
+        # riverificato, altrimenti un template diventato non valido rientra per sempre
+        self.path.write_text(json.dumps([self.GOOD, self.WITH_NAME, self.WITH_LITERAL]),
+                             "utf-8")
+        self.assertEqual(cy.load_bank(self.path), [self.GOOD])
+
+    def test_missing_file_gives_an_empty_bank(self):
+        self.assertEqual(cy.load_bank(self.path), [])
+
+    def test_corrupt_file_is_reported_and_ignored(self):
+        self.path.write_text("{non json", "utf-8")
+        self.assertEqual(cy.load_bank(self.path), [])
+
+    def test_non_string_entries_are_ignored(self):
+        self.path.write_text(json.dumps([self.GOOD, 42, None, {"t": "x"}]), "utf-8")
+        self.assertEqual(cy.load_bank(self.path), [self.GOOD])
 
 
 class TestRecordShape(GeneratorTestCase):

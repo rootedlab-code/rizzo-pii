@@ -37,7 +37,33 @@ Gemini opzionale per la varietà.
 - **I detector ritrovano il 100%** dei valori IP/HASH/URL/DOMAIN generati (test con soglia): il
   dataset chiude il cerchio fra le due metà del progetto.
 
-25 test nuovi, 170 in totale. Nessun impatto sul training finché il dataset non viene incluso.
+**Banca dei template.** I template ottenuti da Gemini vengono salvati in
+`dataset/synthetic/security_templates.json` e riletti alle esecuzioni successive: la quota gratuita
+è nell'ordine delle decine di chiamate al giorno, e senza la banca ciò che si ottiene oggi verrebbe
+buttato a fine esecuzione. Alla rilettura i template sono **rivalidati**, non dati per buoni: il
+file sopravvive alle correzioni del codice, quindi ciò che passava ieri va riverificato.
+
+**Tre difetti trovati provando `--gemini` sul serio, non ragionandoci sopra.**
+
+1. Il guard anti-nomi-inline scartava il 55% dei template: è tarato sulla prosa legale, dove due
+   maiuscole di fila sono "Nome Cognome", mentre qui sono *Security Operations Center*. Il filtro
+   aggiunto è **additivo** — una coppia è perdonata solo se *entrambe* le parole sono nel
+   vocabolario tecnico, quindi "Security Rossi" resta scartato. Nessun termine dell'elenco è un
+   cognome italiano plausibile, e un test lo verifica contro 26 cognomi comuni.
+2. Il log diceva "scartato" anche quando il modello **non aveva risposto**: 17 falsi "scarti" erano
+   48 risposte HTTP 429. Confondere i due esiti fa cercare nel posto sbagliato. Ora sono distinti, e
+   dopo 3 fallimenti di fila si smette — il 429 di quota non è transitorio, e ogni tentativo
+   consuma quello che resta (chiamate sprecate da 48 a 3).
+3. `llm_template_bank` sostituisce `sys.stdout` con un nuovo `TextIOWrapper` a import-time:
+   importarlo **pigramente dentro una funzione faceva sparire tutto l'output già stampato**. Ora è
+   importato in cima, prima di qualsiasi `print`.
+
+**Difetto upstream da segnalare**, che riguarda anche il dataset legale: `find_stray_names` non
+intercetta `"Sig. Bianchi"` — il modo normale di scrivere un titolo — perché il salto di fine frase
+(`if a[-1] in ".:;!?": continue`) scatta prima del controllo sui titoli. Coperto nel nostro modulo,
+file upstream non toccato.
+
+32 test nuovi, 183 in totale. Nessun impatto sul training finché il dataset non viene incluso.
 
 ---
 

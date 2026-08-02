@@ -65,6 +65,11 @@ except ImportError:
     pass
 
 import generate_synthetic_pii as gen  # noqa: E402
+# NB: llm_template_bank sostituisce sys.stdout con un nuovo TextIOWrapper a
+# import-time. Importarlo pigramente dentro una funzione fa SPARIRE tutto cio' che
+# era gia' stato stampato e non ancora scaricato: va importato qui, prima di
+# qualsiasi print. (Stessa ragione per cui contribute_dataset.py lo importa in cima.)
+import llm_template_bank as tb  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "src" / "app"))
 import detectors_cyber  # noqa: E402
@@ -74,6 +79,7 @@ import detectors_cyber  # noqa: E402
 _REAL_TLDS = {t.lower() for t in detectors_cyber.TLDS}
 
 OUT_DIR = ROOT / "dataset" / "synthetic"
+BANK_PATH = OUT_DIR / "security_templates.json"
 GENERATOR_VERSION = "1.0.0"
 
 # Dopo tante chiamate fallite di fila si smette. Il 429 di quota non e' transitorio:
@@ -500,7 +506,6 @@ def _titled_names(text):
     ('if a[-1] in ".:;!?": continue') scatta prima del controllo sui titoli, quindi
     'Sig Bianchi' viene intercettato ma 'Sig. Bianchi' — cioe' il modo normale di
     scriverlo — no. Vale anche per il dataset legale: da segnalare a monte."""
-    import llm_template_bank as tb
     titles = "|".join(re.escape(t) for t in sorted(tb.TITLES, key=len, reverse=True))
     rx = re.compile(rf"\b({titles})\.\s+([A-ZÀ-Þ][A-Za-zÀ-ÿ']+)")
     return [f"{m.group(1)}. {m.group(2)}" for m in rx.finditer(text)
@@ -510,7 +515,6 @@ def _titled_names(text):
 def find_stray_names(text):
     """find_stray_names del progetto, meno i falsi positivi del gergo di sicurezza
     e piu' i nomi con titolo puntato che il guard upstream non vede."""
-    import llm_template_bank as tb
     masked = re.sub(r"\{\w+\}", " ", text)          # i segnaposto non sono nomi
     return ([p for p in tb.find_stray_names(text) if not _is_technical_pair(p)]
             + _titled_names(masked))
@@ -547,13 +551,55 @@ def clean_and_validate(text):
     return text
 
 
+def load_bank(path=BANK_PATH):
+    """Template Gemini accumulati nelle esecuzioni precedenti.
+
+    Scarta quelli che oggi non passerebbero i controlli: la banca e' su disco e
+    sopravvive alle correzioni del codice, quindi cio' che era accettabile ieri va
+    riverificato, non dato per buono."""
+    path = Path(path)
+    if not path.is_file():
+        return []
+    try:
+        items = json.loads(path.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"ATTENZIONE: banca template illeggibile ({path}): {exc}")
+        return []
+    out = [t for t in items if isinstance(t, str) and clean_and_validate(t)]
+    if len(out) != len(items):
+        print(f"  {len(items) - len(out)} template della banca non passano piu' i "
+              f"controlli e sono stati ignorati")
+    return out
+
+
+def save_bank(templates, path=BANK_PATH):
+    """Aggiunge i template nuovi alla banca, senza duplicati. Scrittura atomica."""
+    path = Path(path)
+    existing = []
+    if path.is_file():
+        try:
+            existing = [t for t in json.loads(path.read_text("utf-8")) if isinstance(t, str)]
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    merged = list(existing)
+    added = 0
+    for t in templates:
+        if t not in merged:
+            merged.append(t)
+            added += 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), "utf-8")
+    tmp.replace(path)
+    return added, len(merged)
+
+
 def gemini_templates(per_type):
     """Fa scrivere a Gemini nuovi template di genere sicurezza. [] senza chiave."""
     import os
     if not os.environ.get("GEMINI_API_KEY"):
         print("GEMINI_API_KEY non impostata: uso i soli template scritti a mano.")
         return []
-    import llm_template_bank as tb
     slot_list = "\n".join(f"  {{{s}}}" for s in sorted(ALLOWED_SLOTS))
     out, total, done, refused, no_answer, streak = [], len(DOC_TYPES) * per_type, 0, 0, 0, 0
     print(f"Scrivo {total} template con Gemini [{tb.MODEL}] ...")
@@ -702,14 +748,25 @@ def main():
 
     set_label_cyber(args.label_cyber)
     templates = list(TEMPLATES)
+
+    # La banca su disco e' cio' che rende utile una quota giornaliera piccola: senza,
+    # i template pagati oggi si buttano a fine esecuzione e domani si riparte da zero.
+    banked = load_bank()
+    if banked:
+        print(f"Banca template: {len(banked)} da esecuzioni precedenti")
+        templates += banked
+
     if args.gemini:
-        new = gemini_templates(args.per_type)
-        templates += new
-        if not new:
+        new = [t for t in gemini_templates(args.per_type) if t not in templates]
+        if new:
+            added, total = save_bank(new)
+            print(f"Banca aggiornata: +{added} template (totale {total}) -> {BANK_PATH}")
+            templates += new
+        else:
             # senza questo, quota esaurita o chiave assente producevano in silenzio un
-            # dataset con la sola varieta' dei template scritti a mano
-            print("\nATTENZIONE: nessun template nuovo da Gemini (quota, chiave o rete).\n"
-                  "  Il dataset avra' la sola varieta' dei template scritti a mano.\n")
+            # dataset con la sola varieta' gia' disponibile
+            print("\nATTENZIONE: nessun template NUOVO da Gemini (quota, chiave o rete).\n"
+                  f"  Si prosegue con i {len(templates)} template gia' disponibili.\n")
 
     suffix = "cyberlabeled" if args.label_cyber else "plain"
     out_path = Path(args.out) if args.out else OUT_DIR / f"synthetic_security_it_{suffix}.jsonl"
