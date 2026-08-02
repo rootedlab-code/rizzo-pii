@@ -154,7 +154,14 @@ python src/training/evaluate_entities.py dataset/validation/validation_real.json
     --pred /tmp/legale_sonda.jsonl --normalize --limit 300 --with-detectors --packs ""
 ```
 
-**Criterio:** il micro sul legale non deve scendere. Se scende su 180 esempi,
+**Criterio: la tabella PER TAG, non il micro.** Il micro puo' salire mentre singoli
+tag crollano, ed e' successo davvero: la ricetta con ripasso 4:1 e `--max-tag-repeat
+2` dava micro 0.789 -> 0.793 sul legale, quindi "nessuna regressione", mentre
+`CATASTO` scendeva di **12.5 punti** (0.371 -> 0.246), `ZIPCODE` di 9.2 e altri tre
+tag di 3-5. Guadagnava tanto su `DATE` — che i nostri dati insegnano — e quel
+guadagno, pesato, copriva le perdite.
+
+Il micro sul legale non deve scendere, Se scende su 180 esempi,
 scendera' molto di piu' su 26.851 per due epoche — la sonda e' 150 volte piu'
 piccola dell'addestramento vero.
 
@@ -190,6 +197,31 @@ python src/training/finetune_security.py \
 | ripasso 1:1 | 0.771 | 0.709 | 0.739 |
 | ripasso 4:1 | 0.787 | 0.724 | 0.754 |
 | **ripasso 4:1 + `--max-tag-repeat 2`** | **0.822** | **0.763** | **0.791** |
+
+Confermata su 2.000 righe (4.346 entita'): micro 0.789 -> **0.793**, precision 0.718
+-> **0.730**. Ma vedere sotto: **il micro non basta**.
+
+### Il micro mentiva — dettaglio per tag su 2.000 righe
+
+| tag | prima | dopo | | gold |
+|---|--:|--:|--:|--:|
+| `DATE` | 0.295 | **0.591** | +0.296 | 264 |
+| `AMOUNT` | 0.140 | 0.279 | +0.139 | 43 |
+| `AGE` | 0.445 | 0.571 | +0.126 | 119 |
+| **`CATASTO`** | 0.371 | **0.246** | **-0.125** | **345** |
+| **`ZIPCODE`** | 0.379 | 0.287 | -0.092 | 87 |
+| `BUILDINGNUM` | 0.679 | 0.628 | -0.051 | 156 |
+| `ID_DOC` | 0.905 | 0.862 | -0.043 | 210 |
+| `TIME` | 0.959 | 0.924 | -0.035 | 171 |
+
+Il modello **baratta**: guadagna su cio' che i nostri dati contengono e perde su
+cinque tag legali, fra cui `CATASTO`, che nel nostro dataset non esiste affatto ed e'
+il secondo tag per frequenza nella validation.
+
+Non e' un problema di quantita' di ripasso: nelle 800 righe usate ci sono 186 entita'
+`CATASTO` e 386 `ZIPCODE`, e in termini di entita' il ripasso domina gia' 9 a 1
+(6.347 contro ~700). La deriva va ridotta alla fonte — learning rate piu' basso,
+oppure congelare gli strati bassi — non compensata con altro ripasso.
 
 Il ripasso da solo non basta (si ferma a 0.787): serve anche riequilibrare `DATE`,
 che passa dal 64.1% al 38.8% delle entita'. Il perche' e' nella densita': non e' uno
