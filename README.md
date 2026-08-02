@@ -246,6 +246,52 @@ the ⚙️ dialog in the app and apply immediately, with no restart. Keeping a d
 The two compose: with the `cyber` pack enabled its labels join the taxonomy the policy validates
 against, so `--detectors cyber --keep-tags URL` is a valid combination.
 
+### Whose value is it: scope
+
+In a security report the same tag needs opposite treatment depending on **who owns the value**.
+The client's IP address must be masked; the attacker's C2 address is the subject of the document —
+masking it makes the report unreadable and protects nobody. `--keep-tags IP` cannot express that:
+`IP` is a single tag.
+
+A **scope** file assigns a role to a value — `own`, `adversary`, `public` — and the policy decides
+per *(tag, role)* instead of per tag alone:
+
+```bash
+python src/app/app.py --detectors cyber --profile security-report \
+                      --scope-file ~/engagements/acme/scope.json     # or PII_SCOPE_FILE
+```
+
+```json
+{
+  "own":       {"IP": ["10.0.0.0/8", "203.0.113.5"], "DOMAIN": ["client.example"]},
+  "adversary": {"IP": ["198.51.100.7"], "DOMAIN": ["evil.example"]},
+  "context":   {"roles": ["adversary"], "window": 60}
+}
+```
+
+IP entries match by network membership (a `/8` covers every address inside it), domain entries
+match by label so `mail.client.example` is covered while `evilclient.example` is not, and a URL
+inherits the role of its host — list `evil.example` once, not every URL under it. Defanged forms
+(`198[.]51[.]100[.]7`, `hxxps://`) match their plain entries.
+
+Everything the lists do not cover is `unknown`, and `unknown` is masked. **The textual-context
+heuristic is opt-in**: without `context.roles` it stays off entirely. That asymmetry is deliberate
+— a wrong `own` guessed from surrounding words means extra masking, a wrong `adversary` means
+sensitive data left in clear, so a heuristic is not allowed to unlock "keep" on its own. Even when
+enabled, cues belonging to two different roles inside the same window cancel the decision instead
+of outvoting each other.
+
+The `security-report` profile ships the usual answer: adversary and public indicators
+(IP, DOMAIN, URL, HASH, WALLET, ASN, MAC, CLOUDID) stay readable, everything else is masked.
+`PATH` and `USER` are deliberately excluded — a path often embeds the username of a compromised
+machine, which belongs to the client.
+
+The scope file lists the client's addresses and the adversary's indicators, so it is **the most
+sensitive file in the system**: it has no default location, belongs to the engagement rather than
+to the installation, and must live outside the repository — one per engagement. `GET /scope`
+reports how many entries exist per role and tag, never which; there is deliberately no `POST`.
+A configured but unreadable scope file stops startup instead of silently degrading to no scope.
+
 ---
 
 ## Dataset & training

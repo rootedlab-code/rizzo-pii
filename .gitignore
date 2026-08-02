@@ -41,3 +41,9 @@ venv/
 .DS_Store
 Thumbs.db
 *.log
+
+# ─── File di scope (chi e' cliente, chi e' avversario) ───
+# Vivono FUORI dalla repo, uno per ingaggio: elencano gli indirizzi del cliente e
+# gli indicatori dell'avversario. Questa e' solo una rete, non il posto giusto.
+scope.json
+*.scope.json

@@ -5,6 +5,57 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-02 — Scope: di chi è un valore, e policy per (tag, ruolo)
+
+Il tagger dice **quale tipo** è un valore, la policy **cosa farne**. In un documento di sicurezza
+manca in mezzo la domanda che decide tutto: l'IP appena trovato è del cliente o dell'attaccante?
+Stessa forma, trattamento opposto — mascherare l'infrastruttura dell'attaccante rende il report
+illeggibile, lasciare in chiaro quella del cliente è la fuga che il tool dovrebbe impedire. Un asse
+per tag non può distinguerli: `IP` è un solo tag.
+
+Nuovo modulo **`src/app/scope.py`** (puro): ruoli `own` / `adversary` / `public` / `unknown`,
+risolti nell'ordine **liste esplicite → contesto → unknown**.
+
+- **Le liste vincono sempre**: deterministiche e ispezionabili. Gli IP si confrontano per
+  appartenenza di rete (`ipaddress`, anche quando il valore stesso è un CIDR), i domini **per
+  etichette** — `evilcliente.example` non è un sottodominio di `cliente.example`, e trattarlo come
+  tale darebbe a un dominio dell'attaccante il ruolo del cliente — e una URL eredita il ruolo del
+  suo host. Le forme defanged corrispondono alle voci in chiaro.
+- **Il contesto testuale è opt-in** (`"context": {"roles": ["adversary"]}`). Scoperto provando il
+  modulo su un testo realistico: la sola parola "payload", a 53 caratteri di distanza, marcava
+  `adversary` un indirizzo del cliente non elencato, cioè lo lasciava in chiaro. Un `own` sbagliato
+  dedotto dal testo maschera di più (innocuo), un `adversary` sbagliato è un leak: un'euristica non
+  deve poter sbloccare il "lascia in chiaro" da sola. L'ambiguità si valuta su **tutti** gli indizi,
+  anche di ruoli non abilitati, altrimenti filtrare prima farebbe passare `adversary` proprio sulla
+  frase che nomina entrambe le parti.
+- **Fail-closed ovunque**: indizi di due ruoli nella stessa finestra annullano la decisione invece
+  di vincere ai punti; tutto ciò che resta è `unknown`, che la policy maschera.
+- **Uno stesso valore in due ruoli è `ScopeError`**, non una precedenza inventata: è esattamente il
+  caso in cui indovinare lascia un dato in chiaro. Un file configurato ma illeggibile ferma l'avvio
+  invece di degradare a scope vuoto — lavorare su un ingaggio intero credendo attiva una
+  configurazione che non lo è è peggio che non partire. Nessun file configurato non è un errore: è
+  lo scope vuoto, tutto `unknown`, tutto mascherato, cioè **il comportamento di sempre**.
+- **La policy decide per (tag, ruolo)**: `keep_tags` resta incondizionata e valutata per prima
+  (quindi le due regole non possono contraddirsi), `keep_roles` la raffina. Nuovo profilo
+  `security-report`: indicatori dell'avversario e pubblici in chiaro, tutto il resto mascherato;
+  `PATH` e `USER` esclusi di proposito, perché un percorso contiene spesso lo username di una
+  macchina compromessa, cioè del cliente. `keep_roles` si configura da profilo e da `policy.json`,
+  non da riga di comando: una matrice ruolo→tag schiacciata in una stringa è un invito all'errore
+  di battitura su una decisione di sicurezza.
+- **Il file di scope non entra mai nella repo**: contiene gli indirizzi del cliente e gli
+  indicatori dell'avversario. Nessun percorso di default (appartiene all'ingaggio, non
+  all'installazione), `GET /scope` espone solo i **conteggi** per ruolo e tag e **non** ha un POST
+  — scriverlo da un'interfaccia web significherebbe far transitare gli IOC in un corpo HTTP.
+- Retrocompatibilità dimostrata, non dichiarata: i 32 test della policy preesistente passano
+  **senza una riga modificata**, e `keep_roles` compare in `as_dict()` e in `policy.json` solo se
+  c'è.
+- Corretto contestualmente un difetto di `POST /policy`: salvare dal modale ⚙️ cancellava le regole
+  per ruolo scritte a mano in `policy.json`, che l'UI non espone. Ora vengono rilette e riscritte.
+
+Nessun impatto sul training: scope e policy agiscono **solo in inferenza**.
+
+---
+
 ## 2026-08-02 — Pacchetto di detector "cyber" (opt-in) + keeplist dei riferimenti pubblici
 
 Chi scrive documenti di sicurezza — report di assessment, timeline forensi, ticket di incidente,

@@ -466,7 +466,9 @@ def analyze(text):
 # Endpoints
 # --------------------------------------------------------------------------- #
 def _page():
-    return PAGE.replace("__VERSION__", APP_VERSION)
+    return (PAGE.replace("__VERSION__", APP_VERSION)
+                .replace("__REASON_SCOPE__", policy.REASON_SCOPE)
+                .replace("__ROLE_UNKNOWN__", scope.ROLE_UNKNOWN))
 
 
 @app.route("/")
@@ -562,11 +564,35 @@ def policy_post():
     unknown = sorted(set(keep) - known_tags())
     if unknown:
         return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
-    policy.save_file(profile, keep)
+
+    # keep_roles non e' modificabile da qui (l'UI non lo espone): va riletto e
+    # riscritto tale e quale, altrimenti salvare dal modale cancellerebbe le regole
+    # per ruolo scritte a mano in policy.json.
+    cfg_roles = policy.load_file().get("keep_roles")
+    policy.save_file(profile, keep, cfg_roles)
     # a differenza di host/porta, la policy non richiede un riavvio: si applica alla
     # prossima analisi.
-    POLICY = policy.Policy(keep_tags=keep, profile=profile)
+    roles = policy.resolve_roles(profile, cfg_roles, known_tags())
+    POLICY = policy.Policy(keep_tags=keep, profile=profile, keep_roles=roles)
     return jsonify({"ok": True, **POLICY.as_dict()})
+
+
+@app.route("/scope", methods=["GET"])
+def scope_get():
+    """Stato dello scope attivo: CONTEGGI per ruolo e tag, mai i valori.
+
+    Non esiste il POST corrispondente, a differenza di /policy: il file di scope
+    elenca gli indirizzi del cliente e gli indicatori dell'avversario, e scriverlo
+    da un'interfaccia web significherebbe farli transitare in un corpo HTTP e
+    salvarli dal processo del server. E' un file d'ingaggio, si edita a mano e
+    si indica con --scope-file."""
+    path = scope.scope_path()
+    return jsonify({
+        **SCOPE.as_dict(),
+        "scope_file": str(path) if path else None,
+        "roles": list(scope.ROLES),
+        "unknown_role": scope.ROLE_UNKNOWN,
+    })
 
 
 @app.route("/port-check")
@@ -1021,6 +1047,7 @@ const T = {
   st_ent:"entità", st_uniq:"valori unici", st_model:"dal modello",
   st_regex:"da regex/checksum", st_chars:"caratteri", analyzing:"Analizzo…",
   st_kept:"lasciate in chiaro", kept_tip:"rilevata e lasciata in chiaro dalla policy",
+  kept_scope:"rilevata e lasciata in chiaro per il suo ruolo",
   t_need_input:"Inserisci del testo o un PDF", t_error:"Errore",
   t_copied:"Testo anonimizzato copiato", t_need_anon:"Prima anonimizza un testo",
   t_nothing_dl:"Niente da scaricare", t_dl_ok:"Dizionario scaricato",
@@ -1064,6 +1091,7 @@ const T = {
   st_ent:"entities", st_uniq:"unique values", st_model:"from the model",
   st_regex:"from regex/checksum", st_chars:"characters", analyzing:"Analyzing…",
   st_kept:"left in clear", kept_tip:"detected and left in clear by the policy",
+  kept_scope:"detected and left in clear because of its role",
   t_need_input:"Enter some text or a PDF", t_error:"Error",
   t_copied:"Anonymized text copied", t_need_anon:"Anonymize a text first",
   t_nothing_dl:"Nothing to download", t_dl_ok:"Dictionary downloaded",
@@ -1154,6 +1182,9 @@ async function run(){
   finally{$('go').disabled=false;$('go').innerHTML=old;}
 }
 
+// costanti iniettate da Python: i nomi dei motivi e dei ruoli vivono in un posto solo
+const REASON_SCOPE='__REASON_SCOPE__', ROLE_UNKNOWN='__ROLE_UNKNOWN__';
+
 function render(){
   const d=DATA;
   $('dictCard').style.display='';            // mostra la card dizionario (sotto le due colonne)
@@ -1166,7 +1197,9 @@ function render(){
       const keep=s.action==='keep';                 // rilevata ma non mascherata
       sp.className='ph'+(keep?' keep':'')+(off.has(s.label)?' dim':'');
       sp.style.background=keep?'transparent':c.bg;sp.style.borderColor=c.bd;sp.style.color=c.tx;
-      sp.title=keep?`${s.label} · ${tt('kept_tip')}`
+      const why=s.preservation_reason===REASON_SCOPE?tt('kept_scope'):tt('kept_tip');
+      const who=s.role&&s.role!==ROLE_UNKNOWN?` · ${s.role}`:'';
+      sp.title=keep?`${s.label} · ${why}${who}`
                    :`${s.t}\n(${s.src}${s.validated?' · checksum ✓':''})`;
       sp.innerHTML=keep?escapeHtml(s.t)
                        :s.ph.replace(/[\[\]]/g,'')+(s.validated?'<span class="ck">✓</span>':'');
@@ -1352,6 +1385,9 @@ if __name__ == "__main__":
                     help="tag da lasciare IN CHIARO, es. \"AGE,GENDER\" (default: si maschera tutto)")
     _p.add_argument("--profile", default=None,
                     help=f"profilo di anonimizzazione: {', '.join(sorted(policy.PROFILES))}")
+    _p.add_argument("--scope-file", default=None,
+                    help="file JSON che dice DI CHI e' ogni valore (own/adversary/public); "
+                         "uno per ingaggio, fuori dalla repo. Anche via PII_SCOPE_FILE")
     _args = _p.parse_args()
 
     # I pacchetti PRIMA della policy: known_tags() legge ACTIVE_DETECTORS, quindi
@@ -1365,6 +1401,20 @@ if __name__ == "__main__":
     if POLICY.keep_tags:
         print(f"Policy: profilo '{POLICY.profile}' | lasciati in chiaro: "
               f"{', '.join(sorted(POLICY.keep_tags))}")
+    for _role, _tags in sorted(POLICY.keep_roles.items()):
+        print(f"Policy: in chiaro solo se '{_role}': {', '.join(sorted(_tags))}")
+
+    if _args.scope_file:
+        try:
+            SCOPE = scope.load_scope(_args.scope_file)
+        except scope.ScopeError as _exc:
+            print(f"ERRORE nel file di scope: {_exc}")
+            sys.exit(1)
+    # conteggi, mai i valori: questa riga finisce nei log e negli screenshot
+    _n_scope = sum(n for by_tag in SCOPE.counts().values() for n in by_tag.values())
+    if _n_scope or SCOPE.context_roles:
+        print(f"Scope: {_n_scope} voci elencate | contesto: "
+              + (", ".join(SCOPE.context_roles) if SCOPE.context_roles else "spento"))
 
     _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
 

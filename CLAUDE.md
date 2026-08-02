@@ -88,7 +88,17 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   directory di `config.json` ma è un **file separato** (Tauri riscrive `config.json` dal lato Rust e
   cancellerebbe una chiave estranea). Modulo **puro** (niente torch/flask) → testabile senza modello.
   Le entità tenute in chiaro escono con `action: "keep"` + `preservation_reason` e **non** entrano nel
-  dizionario. Endpoint `GET/POST /policy`: si applica subito, senza riavvio.
+  dizionario. Endpoint `GET/POST /policy`: si applica subito, senza riavvio. Decide per **(tag,
+  ruolo)**: `keep_tags` è incondizionata, `keep_roles` vale solo per un dato ruolo. Profilo
+  `security-report` in `PROFILE_ROLES`. `decide()` ritorna `Decision(action, reason)`, `action()`
+  ne è la proiezione (firma retrocompatibile).
+- `scope.py` — **di chi è un valore**: ruoli `own`/`adversary`/`public`/`unknown`, risolti da
+  **liste esplicite** (IP per appartenenza di rete, domini per etichette, URL per host) e, **solo
+  se dichiarato con `context.roles`**, da indizi testuali. Il contesto è opt-in perché un
+  `adversary` sbagliato lascia un dato in chiaro mentre un `own` sbagliato maschera soltanto di
+  più. Ambiguità → `unknown` → mascherato. File indicato da `--scope-file`/`PII_SCOPE_FILE`, **uno
+  per ingaggio, mai nella repo**; file rotto = `ScopeError` che ferma l'avvio. `GET /scope`
+  espone solo i **conteggi**, mai i valori, e non ha POST. Modulo puro → testabile senza modello.
 - `app.py` — server Flask + **UI**: testo o PDF, chunking con overlap, offset globali + dedup.
   Anonimizzazione **reversibile** (ogni PII → `[FULLNAME_1]`/`[IBAN_1]`… + dizionario locale; tab
   "Ripristina"). Affianca al modello una **rete regex/checksum** (EMAIL/TELEFONO/IBAN/CF/PIVA/carta/

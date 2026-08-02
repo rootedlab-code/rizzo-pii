@@ -271,11 +271,11 @@ def load_policy(cli_keep_tags=None, cli_profile=None, known_tags=None, warn=_war
     if risky:
         warn(f"ATTENZIONE: identificatori diretti lasciati IN CHIARO: {', '.join(risky)}")
 
-    roles = _resolve_roles(profile, cfg.get("keep_roles"), known_tags, warn)
+    roles = resolve_roles(profile, cfg.get("keep_roles"), known_tags, warn)
     return Policy(keep_tags=tags, profile=profile, keep_roles=roles)
 
 
-def _resolve_roles(profile, cfg_roles, known_tags, warn) -> dict:
+def resolve_roles(profile, cfg_roles, known_tags=None, warn=_warn) -> dict:
     """Regole per ruolo = quelle del profilo UNITE a quelle di policy.json.
 
     Unione e non "il primo che parla vince", a differenza di keep_tags: qui non c'e'
