@@ -786,13 +786,40 @@ _HEXRUN_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
 _DIGITS_RE = re.compile(r"\d+")
 
 
+def _cyber_spans(text):
+    """Span dei valori cyber secondo i detector del progetto."""
+    out = []
+    for label, rx, validator, _strict in detectors_cyber.DETECTORS:
+        for m in rx.finditer(text):
+            if validator is None or validator(m.group()):
+                out.append((m.start(), m.end(), label))
+    return out
+
+
 def skeleton(rec):
-    """Struttura di una riga, indipendente dai valori iniettati."""
-    text, out, pos = rec["source_text"], [], 0
-    for e in sorted(rec["entities"], key=lambda x: x["start"]):
-        out.append(text[pos:e["start"]])
-        out.append("{" + e["label"] + "}")
-        pos = e["end"]
+    """Struttura di una riga, indipendente dai valori iniettati.
+
+    Maschera le entita' etichettate E i valori cyber riconosciuti dai detector, cosi'
+    la stessa struttura da' lo stesso scheletro nelle due modalita' di etichettatura.
+
+    Perche' servono i detector e non basta normalizzare cifre ed esadecimali: domini,
+    percorsi e utenze sono fatti di PAROLE. Misurato sul dataset da 11.163 righe,
+    senza questo passaggio gli scheletri risultavano 10.376 invece di 7.188 e lo
+    scheletro piu' frequente compariva 131 volte invece delle 20 del cap — cioe' il
+    cap non mordeva, perche' due righe identiche nella struttura sembravano diverse
+    solo per il dominio che contenevano."""
+    text = rec["source_text"]
+    spans = [(e["start"], e["end"], e["label"]) for e in rec["entities"]]
+    spans += _cyber_spans(text)
+    spans.sort()
+
+    out, pos = [], 0
+    for start, end, label in spans:
+        if start < pos:                       # sovrapposto a uno span gia' preso
+            continue
+        out.append(text[pos:start])
+        out.append("{" + label + "}")
+        pos = end
     out.append(text[pos:])
     s = _HEXRUN_RE.sub("§", "".join(out))
     return _DIGITS_RE.sub("#", s)

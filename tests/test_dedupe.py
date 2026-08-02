@@ -55,6 +55,24 @@ class TestSkeleton(unittest.TestCase):
         b = rec("Artefatto con hash 5f4dcc3b5aa765d61d8327deb882cf99 trovato.")
         self.assertEqual(cy.skeleton(a), cy.skeleton(b))
 
+    def test_word_like_cyber_values_are_masked_too(self):
+        # domini, percorsi e utenze sono fatti di PAROLE: normalizzare cifre ed
+        # esadecimali non basta, e senza i detector il cap non morde
+        for x, y in (("Traffico verso evil.example bloccato.",
+                      "Traffico verso login-verify.test bloccato."),
+                     ("Artefatto in C:\\Users\\m.rossi\\Temp rilevato.",
+                      "Artefatto in C:\\Users\\a.bianchi\\backup rilevato."),
+                     ("Scaricato da https://a.example/x.bin ieri.",
+                      "Scaricato da https://b.test/y.zip ieri.")):
+            self.assertEqual(cy.skeleton(rec(x)), cy.skeleton(rec(y)), x)
+
+    def test_the_skeleton_is_the_same_in_both_labelling_modes(self):
+        # con --label-cyber l'IP e' un'entita', senza non lo e': la struttura no
+        text = "Connessione da 203.0.113.5 verso evil.example."
+        etichettato = rec(text, [("203.0.113.5", "IP"), ("evil.example", "DOMAIN")])
+        nudo = rec(text)
+        self.assertEqual(cy.skeleton(etichettato), cy.skeleton(nudo))
+
     def test_different_prose_is_not_collapsed(self):
         a = rec("Connessione da 203.0.113.5 sulla porta 443.")
         b = rec("Blocco della connessione da 203.0.113.5 sulla porta 443.")
