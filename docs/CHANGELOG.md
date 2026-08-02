@@ -83,7 +83,29 @@ processo di test — nessun modello caricato, nessuna rete, nessuna quota, nessu
 macchina — il che permette anche di provare risposte malformate ed errori, che con un provider vero
 non si sanno riprodurre.
 
-50 test nuovi, 201 in totale. Nessun impatto sul training finché il dataset non viene incluso.
+**Due difetti trovati leggendo le righe, non i contatori.**
+
+*Le date erano date di nascita.* Tutti i verbali di incidente cadevano fra il **1955 e il 2005**
+(«l'attacco è avvenuto il 25/05/1967»): su 4002 date generate, zero dal 2024 in poi. Il generatore
+di monte usa `randint(1955, 2005)`, intervallo corretto per un atto legale — dove la data che conta
+è quella di nascita di una parte — e sbagliato per un documento dove la data è *quando è successo
+il fatto*. Non era un caso limite: `DATE` è l'etichetta **più frequente** del dataset, quindi era
+il segnale dominante ed era falso. Il modulo registra ora un proprio generatore, con anche la
+varietà di formato dei documenti tecnici (`gg/mm/aaaa`, ISO, esteso, ISO con ora). Verificato sul
+dataset finale: 52.077 date, tutte fra 2024 e 2026, distribuite uniformemente.
+
+*Il cap non mordeva.* Lo scheletro normalizzava cifre ed esadecimali ma non domini, percorsi e
+utenze — che sono fatti di parole. Lo scheletro più frequente compariva **131 volte invece di 20**,
+e gli scheletri risultavano 10.376 invece dei 7.188 reali: un 31% di varietà inesistente. Ora
+maschera anche ciò che riconoscono i detector, che sono il componente che sa cos'è un valore cyber.
+
+**Limiti dichiarati.** La distribuzione degli IP è irrealistica per costruzione — tutti da tre `/24`
+documentali più RFC 1918 — quindi con `--label-cyber` il modello imparerebbe una nozione falsa di
+«IP». È l'argomento più forte a favore del default scelto, che lascia quel lavoro ai detector. E
+manca l'arma migliore del progetto, l'iniezione in frasi reali held-out: per il genere sicurezza non
+esiste un corpus pubblico utilizzabile.
+
+54 test nuovi, 221 in totale. Nessun impatto sul training finché il dataset non viene incluso.
 
 ---
 
