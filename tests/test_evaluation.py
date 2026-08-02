@@ -158,9 +158,6 @@ class TestDetectorBaseline(unittest.TestCase):
         self.assertEqual({e.label for e in only}, {"IP"})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestCidrPool(PoolTestCase):
     """Il pool delle reti CIDR e' dichiarato, non dedotto da is_private.
@@ -186,3 +183,6 @@ class TestCidrPool(PoolTestCase):
         for a in t:
             for b in e:
                 self.assertFalse(a.overlaps(b), f"{a} e {b}")
+
+if __name__ == "__main__":
+    unittest.main()
