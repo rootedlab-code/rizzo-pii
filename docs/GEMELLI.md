@@ -30,6 +30,7 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 20 | leva tarata sulla sonda ↔ leva che agisce davvero nella corsa piena | `quante_di_ripasso()` distingue righe *richieste* e *usate*, e il training avvisa quando il pool satura; `test_finetune_security.py::TestRehearsalSaturation` | ✅ |
 | 21 | fusione delle entità adiacenti in **valutazione** ↔ merge dell'**app** | `_fuse_adjacent()` allinea l'app a `normalize_entities()`; `test_analyze_policy.py::TestAdjacentSpansAreFused` | ✅ |
 | 22 | popolazione su cui il numero è misurato ↔ popolazione d'uso | `TIME` 0.950 sul congelato e 0 su 9 su un documento vero — **nessun test**, si trova solo usando il tool | ⚠️ |
+| 23 | testo su cui si MISURA ↔ testo che esiste in produzione | `from_bio()` riunisce i WordPiece; `test_evaluation.py::TestWordPieceRejoin`. Resta la spaziatura attorno alla punteggiatura: **approssimata, non reale** | ⚠️ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -100,6 +101,16 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   Nota su cosa NON si fonde: gli span **validati**. Un IP o un CF sono completi per
   costruzione, quindi due accanto sono due entità — fonderli maschererebbe
   `203.0.113.1 203.0.113.2` con un solo segnaposto.
+
+- **#23** — `from_bio()` ricostruiva il testo unendo TUTTI i token con uno spazio, ma
+  quelli della validation sono WordPiece: `CAP` diventava `CA ##P`. Il **63,7%** delle
+  righe conteneva marcatori e il **45,8%** delle entità del gold ne aveva uno dentro il
+  proprio span. Il docstring lo sapeva a metà — «gold e predizione partono dallo stesso
+  testo, quindi il confronto resta valido» — vero per l'A/B, falso per tutto il resto.
+  L'effetto non era di deprimere i numeri ma di **gonfiarli**: gli identificatori
+  lunghi risultavano pre-spezzati esattamente sui confini del gold, quindi `ID_DOC` per
+  la baseline passava da 190 su 210 a **40** una volta corretto. Trovato inseguendo
+  tutt'altro: il detector `ZIPCODE` nuovo trovava 0 CAP su 87 nel legale.
 
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:

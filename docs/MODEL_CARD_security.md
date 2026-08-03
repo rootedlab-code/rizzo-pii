@@ -39,34 +39,44 @@ Questo modello chiude entrambe.
 
 ## Risultati
 
-Misurati su un **test congelato** di 4.000 righe mai viste durante lo sviluppo
-(8.849 entità), eseguito **una volta sola** contro un criterio scritto e depositato
-*prima* di guardare i numeri. Sistema completo — modello + rete regex/checksum core —
-come gira in produzione.
+Misurati su un **campione cieco** di 1.000 righe (2.279 entità), mai viste durante lo
+sviluppo, contro un criterio scritto e depositato *prima* di guardare i numeri.
+Sistema completo — modello + rete regex/checksum core — come gira in produzione.
 
 | | recall | precision | F1 | PII lasciate in chiaro |
 |---|--:|--:|--:|--:|
-| `rizzo-pii-0.3B` | 0.806 | 0.738 | 0.770 | 1.721 |
-| **questo modello** | **0.858** | **0.795** | **0.826** | **1.254** |
+| `rizzo-pii-0.3B` | 0.737 | 0.670 | 0.702 | 600 |
+| **questo modello** | **0.808** | **0.742** | **0.773** | **438** |
 
-**467 PII in meno** lasciate in chiaro, e 579 falsi positivi in meno.
+**162 PII in meno** lasciate in chiaro su 2.279, e 185 falsi positivi in meno.
 
 Il confronto è **appaiato** (McNemar esatto sulle stesse entità, non due intervalli
-affiancati): **559 entità recuperate contro 92 perse**, p < 1e-6.
+affiancati): **182 entità recuperate contro 20 perse**, p < 1e-6.
 
-Per tag, fra i 19 con almeno 100 entità nel gold: cinque migliorano in modo
-statisticamente distinguibile, quattordici restano invariati, **nessuno peggiora**.
+Per tag, fra i 9 con almeno 100 entità nel gold: cinque migliorano in modo
+statisticamente distinguibile, quattro restano invariati, **nessuno peggiora**.
 
 | tag | entità recuperate |
 |---|--:|
-| `DATE` | +254 |
-| `DOCID` | +69 |
-| `BUILDINGNUM` | +35 |
-| `CATASTO` | +33 |
-| `ID_DOC` | +18 |
+| `DATE` | +61 |
+| `ID_DOC` | +28 |
+| `CATASTO` | +18 |
+| `BUILDINGNUM` | +13 |
+| `CITY` | +12 |
+
+> **Una versione precedente di questa scheda riportava 0.806 → 0.858.** Quei numeri
+> venivano da un apparato di valutazione che ricostruiva il testo unendo i token
+> WordPiece con uno spazio: `CAP` diventava `CA ##P`, e il 46% delle entità del gold
+> aveva un marcatore dentro il proprio span. L'effetto non era di deprimere i
+> risultati ma di **gonfiarli**, perché gli identificatori lunghi risultavano
+> pre-spezzati esattamente sui confini attesi. Corretto l'apparato, la misura è stata
+> rifatta su un campione cieco mai usato. Il confronto A/B era comunque valido —
+> entrambi i modelli sullo stesso testo — quindi la decisione di rilascio non cambia,
+> cambiano i valori assoluti.
 
 Sul genere sicurezza il recall passa da 0.893 a **0.939**, e `DATE` da 0.090 a
-**0.959**.
+**0.959**. Quel corpus non ha artefatti di tokenizzazione, quindi quei numeri non
+sono stati toccati dalla correzione.
 
 > **I numeri valgono per il sistema con la fusione degli span adiacenti** (`_fuse_adjacent`
 > in `app.py`, dal 2026-08-03). Senza, questo modello spezza `FULLNAME` nel **9,9%** dei
