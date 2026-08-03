@@ -211,16 +211,33 @@ def from_bio(rec):
     si salta sempre, perche' richiede di misurare qualcosa che non si sta cercando di
     migliorare.
 
-    I token si uniscono con uno spazio: il testo ricostruito non ha la spaziatura
-    originale, ma gold e predizione partono dallo stesso identico testo, quindi il
-    confronto resta valido."""
+    I token della validation sono **WordPiece**, e i pezzi di continuazione portano il
+    prefisso `##`. Unendoli tutti con uno spazio si otteneva `CA ##P` al posto di
+    `CAP` e `Son ##ce ##bo ##z` al posto di un nome: misurato, il **63,7%** delle
+    righe conteneva marcatori `##` e il **45,8%** delle entita' del gold ne aveva uno
+    dentro il proprio span.
+
+    Il confronto A/B restava valido — gold e predizione partono dallo stesso testo —
+    ma tutto il resto no: i valori assoluti descrivevano un testo che in produzione
+    non esiste, la rete regex girava su identificatori spezzati, e i quattro tag
+    dichiarati "deboli" (`CREDITCARDNUMBER`, `IBAN`, `AMOUNT`, `ZIPCODE`) sono
+    esattamente gli alfanumerici lunghi che WordPiece divide.
+
+    Qui `##x` si attacca al token precedente senza spazio, come vuole la convenzione.
+    La spaziatura resta approssimata — non si recupera dai soli token — ma le parole
+    tornano intere."""
     parts, entities, pos = [], [], 0
     corrente = None
     for token, label in zip(rec["tokens"], rec["bio_labels"]):
+        continua = token.startswith("##") and len(token) > 2 and parts
+        pezzo = token[2:] if continua else token
+        if parts and not continua:
+            parts.append(" ")
+            pos += 1
         start = pos
-        parts.append(token)
-        pos += len(token) + 1
-        end = start + len(token)
+        parts.append(pezzo)
+        pos += len(pezzo)
+        end = pos
         tipo = label.split("-", 1)[1] if label != "O" and "-" in label else None
         if tipo and label.startswith("I-") and corrente and corrente["label"] == tipo:
             corrente["end"] = end
@@ -232,7 +249,7 @@ def from_bio(rec):
             corrente = {"start": start, "end": end, "label": tipo}
     if corrente:
         entities.append(corrente)
-    text = " ".join(parts)
+    text = "".join(parts)
     for e in entities:
         e["value"] = text[e["start"]:e["end"]]
     return {"source_text": text, "entities": entities,

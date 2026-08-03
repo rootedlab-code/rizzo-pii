@@ -184,6 +184,50 @@ class TestCidrPool(PoolTestCase):
             for b in e:
                 self.assertFalse(a.overlaps(b), f"{a} e {b}")
 
+class TestWordPieceRejoin(unittest.TestCase):
+    """I token della validation sono WordPiece: `##x` continua la parola precedente.
+    Unendoli tutti con uno spazio si otteneva `CA ##P` invece di `CAP`.
+
+    Misurato prima della correzione: il 63,7% delle righe conteneva marcatori `##` e
+    il 45,8% delle entita' del gold ne aveva uno DENTRO il proprio span. Il confronto
+    A/B restava valido (stesso testo per entrambi), ma i valori assoluti descrivevano
+    un testo che in produzione non esiste, e i quattro tag dichiarati deboli sono
+    esattamente gli alfanumerici lunghi che WordPiece divide."""
+
+    def test_continuation_pieces_are_glued_to_the_previous_token(self):
+        out = ev.from_bio({"tokens": ["CA", "##P", ":", "900", "##20"],
+                           "bio_labels": ["O", "O", "O", "B-ZIPCODE", "I-ZIPCODE"]})
+        self.assertEqual(out["source_text"], "CAP : 90020")
+
+    def test_the_entity_span_covers_the_whole_rejoined_word(self):
+        out = ev.from_bio({"tokens": ["in", "900", "##20", "."],
+                           "bio_labels": ["O", "B-ZIPCODE", "I-ZIPCODE", "O"]})
+        e = out["entities"][0]
+        self.assertEqual(out["source_text"][e["start"]:e["end"]], "90020")
+
+    def test_offsets_agree_with_the_stored_value(self):
+        out = ev.from_bio({"tokens": ["Son", "##ce", "##bo", "##z", "citta"],
+                           "bio_labels": ["B-CITY", "I-CITY", "I-CITY", "I-CITY", "O"]})
+        for e in out["entities"]:
+            self.assertEqual(out["source_text"][e["start"]:e["end"]], e["value"])
+        self.assertEqual(out["entities"][0]["value"], "Sonceboz")
+
+    def test_ordinary_tokens_still_get_a_space(self):
+        out = ev.from_bio({"tokens": ["Mario", "Rossi", "ha", "firmato"],
+                           "bio_labels": ["B-GIVENNAME", "B-SURNAME", "O", "O"]})
+        self.assertEqual(out["source_text"], "Mario Rossi ha firmato")
+
+    def test_a_bare_double_hash_is_not_treated_as_a_continuation(self):
+        # '##' da solo non ha un pezzo dopo il prefisso: attaccarlo produrrebbe uno
+        # span di larghezza zero
+        out = ev.from_bio({"tokens": ["a", "##", "b"], "bio_labels": ["O", "O", "O"]})
+        self.assertIn("##", out["source_text"])
+
+    def test_a_leading_continuation_has_nothing_to_attach_to(self):
+        out = ev.from_bio({"tokens": ["##ab", "c"], "bio_labels": ["O", "O"]})
+        self.assertTrue(out["source_text"].startswith("##ab"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
