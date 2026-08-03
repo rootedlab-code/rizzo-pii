@@ -115,6 +115,41 @@ del test congelato» — ha avuto effetto pratico al primo utilizzo.
 
 **La riserva non e' stata toccata**: 1.000 righe, impronta invariata.
 
+## RISERVA SPESA — 2026-08-03, dopo la correzione dell'apparato
+
+Il test congelato era gia' stato eseguito e superato. Poi si e' scoperto che
+`from_bio()` ricostruiva il testo unendo i WordPiece con uno spazio: il **63,4%**
+delle righe del congelato conteneva marcatori `##` e il **45,8%** delle entita' del
+gold ne aveva uno dentro il proprio span.
+
+Il confronto A/B restava valido — entrambi i modelli sullo stesso testo — quindi la
+**decisione di rilasciare non e' mai stata in discussione**. Erano i valori assoluti
+a non descrivere niente di reale, e per rimisurarli serviva un campione cieco.
+
+**ESITO SULLA RISERVA: SUPERATO.** 1.000 righe, 2.279 entita', apparato corretto.
+
+| | recall | precision | F1 |
+|---|--:|--:|--:|
+| baseline | 0.737 | 0.670 | 0.702 |
+| candidato | **0.808** | **0.742** | **0.773** |
+
+- **A** — 182 recuperate contro 20 perse, p < 1e-6. Superata.
+- **B** — 9 tag con almeno 100 entita': cinque migliorano (`DATE` +61, `ID_DOC` +28,
+  `CATASTO` +18, `BUILDINGNUM` +13, `CITY` +12), quattro invariati, **zero
+  peggiorano**. Superata.
+- **C** — `CATASTO` e `ID_DOC` migliorano, `ZIPCODE` pure (5 -> 12). Superata.
+
+I due campioni concordano: +0.079 di recall sulle esplorative, +0.071 sulla riserva.
+
+**Perche' i numeri sono piu' bassi di quelli del congelato** (0.806 -> 0.858): il
+testo rotto **pre-spezzava gli identificatori lunghi esattamente sui confini del
+gold**, quindi `ID_DOC`, `PIVA` e `ZIPCODE` risultavano molto piu' facili di quanto
+siano. L'apparato difettoso GONFIAVA, non deprimeva.
+
+**Non resta piu' nessun campione cieco.** Una ricetta futura richiede un insieme da
+una fonte diversa, non un altro ritaglio di questa validation. Era scritto prima di
+spendere la riserva, ed e' il momento in cui inizia a valere.
+
 ## Cosa questo criterio NON copre
 
 - La resa sul genere sicurezza. Va misurata, ma non decide la sostituzione: il
