@@ -86,6 +86,35 @@ scelta di quale regola applicare la fa il numero che e' uscito.
 Se A passa ma B o C no, l'esito e' **uno scambio**, non un miglioramento, e la
 decisione se accettarlo e' dell'utente, non automatica.
 
+## ESEGUITO — 2026-08-03, una volta sola
+
+Candidato: fine-tuning del checkpoint rilasciato sul corpus di sicurezza bilanciato
+(18.805 righe) + 10.000 di ripasso, **3 epoche**, batch efficace 16, lr 2e-5,
+`max_len` 2048. Scelto sulle righe 0-2000 fra quattro varianti (1, 2, 3 epoche e
+encoder congelato). Baseline rimisurata **sullo stesso hardware**, non riusata da
+una corsa precedente.
+
+**ESITO: SUPERATO.** 4.000 righe, 8.849 entita' del gold, rete regex core come in
+produzione.
+
+| | recall | precision | F1 | PII in chiaro |
+|---|--:|--:|--:|--:|
+| baseline | 0.806 | 0.738 | 0.770 | 1.721 |
+| candidato | **0.858** | **0.795** | **0.826** | **1.254** |
+
+- **A** — 559 entita' recuperate contro 92 perse, p < 1e-6. Superata.
+- **B** — 19 tag con almeno 100 entita': cinque migliorano (`DATE` +254, `DOCID` +69,
+  `BUILDINGNUM` +35, `CATASTO` +33, `ID_DOC` +18), quattordici invariati, **zero
+  peggiorano**. Superata.
+- **C** — `CATASTO` migliora (p = 0.001), `ID_DOC` migliora (p = 0.002), `ZIPCODE`
+  invariato (12 perse / 15 recuperate, p = 0.70). Superata.
+
+`ZIPCODE` ha **159** entita' qui contro le 87 delle esplorative: sul congelato
+*decide*, e la regola aggiunta lo stesso giorno — «i conteggi che contano sono quelli
+del test congelato» — ha avuto effetto pratico al primo utilizzo.
+
+**La riserva non e' stata toccata**: 1.000 righe, impronta invariata.
+
 ## Cosa questo criterio NON copre
 
 - La resa sul genere sicurezza. Va misurata, ma non decide la sostituzione: il

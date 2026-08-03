@@ -377,6 +377,39 @@ python src/training/finetune_security.py \
 
 Deve stampare `num_labels INVARIATO`. Se cambia, si sta facendo l'altra cosa.
 
+## ESEGUITO — la corsa a scala piena del 2026-08-03
+
+Pod NVIDIA L4 23 GB, torch 2.8.0+cu128. Preflight verde su tutto, GPU compresa.
+**I corpora rigenerati sul pod hanno impronte identiche al manifesto**: la
+riproducibilita' e' verificata, non assunta.
+
+Quattro varianti, un asse alla volta, misurate sulle righe 0-2000 con McNemar
+appaiato per tag:
+
+| variante | micro recall | `CATASTO` | `ID_DOC` | regola B |
+|---|--:|--:|--:|---|
+| baseline (rilasciato) | 0.789 | 0.371 | 0.905 | — |
+| 1 epoca | 0.833 | 0.580 | 0.814 | violata |
+| 2 epoche | **0.856** | **0.597** | 0.857 | violata (`ID_DOC`, p = 0.013) |
+| **3 epoche** | 0.844 | 0.464 | **0.948** | **soddisfatta** |
+| `--freeze-encoder` | **0.696** | **0.000** | 0.581 | catastrofica |
+
+**`--freeze-encoder` e' la variante peggiore, non la migliore.** Il doc lo
+descriveva come «la leva piu' forte contro la dimenticanza: il modello non puo'
+scordare cio' che non puo' modificare». E' falso, e la ragione va ricordata: **la
+dimenticanza non avviene nell'encoder, avviene nella testa**. Congelando l'encoder
+resta addestrabile solo il classificatore, che e' condiviso da tutti e 22 i tag: il
+genere nuovo se lo riscrive addosso e i confini decisionali del dominio vecchio
+spariscono. `CATASTO` a **0.000**, 424 entita' perse contro 21 recuperate.
+
+`ID_DOC` e `ZIPCODE` tirano in direzioni opposte sull'asse delle epoche — il primo
+e' dimenticanza e si recupera coi passaggi sul ripasso, il secondo e' interferenza e
+peggiora con quelli sul genere nuovo. Su quell'asse non esiste un ottimo, esiste una
+curva; 3 epoche e' il punto in cui nessun tag decisivo arretra.
+
+Il test congelato e' stato **superato**: dettaglio e numeri in
+[CRITERIO.md](CRITERIO.md).
+
 ## 4. I due numeri di arrivo, e la decisione
 
 Stessi comandi del punto 2, con `--model models/rizzo-pii-0.3B-security`.
