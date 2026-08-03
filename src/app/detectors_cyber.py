@@ -200,7 +200,43 @@ DATE_DETECTORS = [
 ]
 
 
-DETECTORS = DATE_DETECTORS + [
+# TIME era l'unico valore STRUTTURATO del documento affidato al solo modello, e
+# infatti e' l'unico che perde. Misurato su un verbale d'assessment vero: 9 orari su
+# 9 lasciati in chiaro, mentre le date — che un detector ce l'hanno — passavano tutte.
+#
+# Il difetto non si vedeva dalle metriche: sul test congelato `TIME` sta a recall
+# 0.950. La validation legale contiene orari nei formati che il modello gestisce, i
+# documenti di sicurezza usano orari TONDI — 08:00, 10:00, 14:00 — e su quelli il
+# modello fallisce sistematicamente (03:14 e 14:30 passano, tutti i :00 no). Un
+# numero vero su una popolazione diversa da quella d'uso.
+#
+# In un verbale forense la timeline E' il documento: senza questo, anonimizzarlo
+# conserva l'intera cronologia dell'incidente.
+def time_ok(value):
+    """Vera se e' un orario dell'orologio: ore 00-23, minuti e secondi 00-59.
+
+    La forma da sola non basta — `99:99` ce l'ha — e senza validazione ogni coppia
+    di numeri separata da due punti diventerebbe un orario."""
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", value.strip())
+    if not m:
+        return False
+    ore, minuti = int(m.group(1)), int(m.group(2))
+    secondi = int(m.group(3)) if m.group(3) else 0
+    return ore <= 23 and minuti <= 59 and secondi <= 59
+
+
+TIME_DETECTORS = [
+    # Il lookbehind esclude il PUNTO, non solo le cifre: senza, in `192.168.1.10:22`
+    # lo spezzone `10:22` e' un orario valido e ogni "IP:porta" diventerebbe un
+    # falso positivo. Il lookahead esclude cifre e due punti, cosi' `42:8080` non
+    # viene troncato a `42:80`.
+    ("TIME",
+     re.compile(r"(?<![\d:.])\d{1,2}:\d{2}(?::\d{2})?(?![\d:])"),
+     time_ok, True),
+]
+
+
+DETECTORS = DATE_DETECTORS + TIME_DETECTORS + [
     # URL prima del dominio: e' lo span piu' lungo e validato, quindi vince il merge.
     ("URL",
      re.compile(rf"(?<![\w@])(?:h[xt]{{2}}ps?|ftps?|wss?){COLON}//{TAIL}"),

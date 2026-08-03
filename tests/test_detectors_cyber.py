@@ -231,10 +231,6 @@ class TestIntegration(unittest.TestCase):
         self.assertEqual(restored, self.REPORT)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestDate(unittest.TestCase):
     """DATE non era coperta da NESSUN detector, ne' nel core ne' altrove: dipendeva
     solo dal modello, che e' addestrato su date 1955-2005 e su '24/01/2024' tagga
@@ -274,3 +270,59 @@ class TestDate(unittest.TestCase):
 
     def test_a_year_out_of_range_is_refused(self):
         self.assertEqual(find("DATE", "anno 12/05/1499 remoto"), [])
+
+
+class TestTime(unittest.TestCase):
+    """TIME era l'unico valore STRUTTURATO affidato al solo modello, ed e' l'unico
+    che perdeva. Misurato su un verbale d'assessment vero: 9 orari su 9 lasciati in
+    chiaro, mentre le date passavano tutte.
+
+    Il difetto non si vedeva dalle metriche — sul test congelato TIME sta a recall
+    0.950 — perche' la validation legale contiene orari nei formati che il modello
+    gestisce, mentre i documenti di sicurezza usano orari TONDI. In una timeline
+    forense gli orari sono il documento."""
+
+    def test_the_round_hours_the_model_missed_are_found(self):
+        # il caso reale: 03:14 il modello lo prendeva, 08:00 e 10:00 no
+        for orario in ("08:00", "10:00", "14:00", "12:00", "07:00"):
+            self.assertEqual(find("TIME", f"alle {orario} l'alert"), [orario], orario)
+
+    def test_minutes_and_seconds_are_found(self):
+        self.assertEqual(find("TIME", "alle 03:14 del mattino"), ["03:14"])
+        self.assertEqual(find("TIME", "chiusura 23:59:01 registrata"), ["23:59:01"])
+
+    def test_a_single_digit_hour_is_found(self):
+        self.assertEqual(find("TIME", "alle 9:05 in punto"), ["9:05"])
+
+    def test_a_time_range_gives_two_matches(self):
+        self.assertEqual(find("TIME", "fascia oraria 09:00-13:30"), ["09:00", "13:30"])
+
+    def test_impossible_clock_values_are_refused(self):
+        for falso in ("25:00", "12:99", "99:99", "23:59:99"):
+            self.assertEqual(find("TIME", f"valore {falso} rilevato"), [], falso)
+
+    def test_an_ip_with_a_port_is_not_a_time(self):
+        # senza il punto nel lookbehind, in 192.168.1.10:22 lo spezzone 10:22 e' un
+        # orario perfettamente valido, e ogni "IP:porta" diventerebbe un falso positivo
+        for benign in ("da 192.168.1.10:22 in ingresso",
+                       "verso 203.0.113.42:8080 uscente",
+                       "su 10.0.0.1:443 esposto"):
+            self.assertEqual(find("TIME", benign), [], benign)
+
+    def test_other_colon_shaped_values_are_not_times(self):
+        for benign in ("rapporto 4:1 fra le due",
+                       "risoluzione 16:9 dello schermo",
+                       "max-age 31536000 dichiarato",
+                       "MAC 00:1b:44:11:3a:b7 osservato"):
+            self.assertEqual(find("TIME", benign), [], benign)
+
+    def test_the_time_inside_an_iso_timestamp_is_left_to_date(self):
+        # DATE copre gia' l'intero '2026-10-14 17:48': il merge dell'app tiene lo
+        # span piu' lungo, quindi qui TIME non deve aggiungere un secondo candidato
+        # annidato che frammenterebbe la sostituzione
+        self.assertEqual(find("DATE", "evento 2026-10-14 17:48 registrato"),
+                         ["2026-10-14 17:48"])
+
+
+if __name__ == "__main__":
+    unittest.main()
