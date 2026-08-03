@@ -100,6 +100,20 @@ def head_parameters(nomi):
     return agganciati, orfani
 
 
+def quante_di_ripasso(n_nuove, ratio, n_pool):
+    """Righe di ripasso da usare e righe richieste dal rapporto: `(quante, richieste)`.
+
+    Le due divergono quando il pool si esaurisce, e da quel punto in poi
+    `--rehearsal-ratio` **e' inerte**: alzarlo non cambia niente, e nemmeno
+    `--rehearsal-strategy`, perche' prendendo tutto il pool non c'e' piu' nulla da
+    selezionare. E' successo davvero nella corsa a scala piena — 18.805 x 4 = 75.220
+    richieste da un pool di 10.000 — mentre la stessa leva veniva tarata sulla sonda,
+    dove il pool non si esaurisce e quindi funziona. Chi legge il comando vede due
+    opzioni che a scala piena non sono collegate a niente."""
+    richieste = int(n_nuove * ratio)
+    return min(n_pool, richieste), richieste
+
+
 def scheda_corsa(args, righe, esempi, ripasso_righe):
     """Il record di cio' che la corsa ha davvero eseguito, salvato in finetune.json.
 
@@ -293,7 +307,16 @@ def main():
     if args.rehearsal:
         import random
         ripasso = load(args.rehearsal)
-        quante = min(len(ripasso), int(len(rows) * args.rehearsal_ratio))
+        quante, richieste = quante_di_ripasso(len(rows), args.rehearsal_ratio,
+                                              len(ripasso))
+        if richieste > len(ripasso):
+            satura = len(ripasso) / len(rows)
+            print(f"  ATTENZIONE: --rehearsal-ratio {args.rehearsal_ratio:g} chiede "
+                  f"{richieste} righe da un pool di {len(ripasso)}: le prende TUTTE.\n"
+                  f"  Sopra ratio {satura:.2f} la leva e' INERTE, e con essa "
+                  f"--rehearsal-strategy (non c'e' piu' nulla da selezionare).\n"
+                  f"  Per pesare di piu' il dominio originale serve un pool piu' "
+                  f"grande, non un rapporto piu' alto.")
         if args.rehearsal_strategy == "stratified":
             scelte = stratified_rehearsal(ripasso, quante, rows, TAG_MAP, DROP_TYPES)
         else:

@@ -217,6 +217,38 @@ class TestStratifiedRehearsal(unittest.TestCase):
         self.assertEqual(len(scelte), len(self.pool))
 
 
+class TestRehearsalSaturation(unittest.TestCase):
+    """Quando il pool si esaurisce, --rehearsal-ratio smette di fare qualcosa. E'
+    successo nella corsa a scala piena mentre la stessa leva veniva tarata sulla
+    sonda, dove il pool NON si esaurisce: si crede di aver tarato un rapporto, e nel
+    run vero quel rapporto non e' collegato a niente."""
+
+    def test_below_saturation_the_ratio_decides(self):
+        quante, richieste = fs.quante_di_ripasso(200, 4, 10000)
+        self.assertEqual((quante, richieste), (800, 800))
+
+    def test_above_saturation_the_pool_decides(self):
+        # il caso reale: 18.805 righe nuove, ratio 4, pool da 10.000
+        quante, richieste = fs.quante_di_ripasso(18805, 4, 10000)
+        self.assertEqual(quante, 10000)
+        self.assertEqual(richieste, 75220)
+        self.assertNotEqual(quante, richieste)      # e' questo che va segnalato
+
+    def test_raising_the_ratio_past_saturation_changes_nothing(self):
+        a, _ = fs.quante_di_ripasso(18805, 4, 10000)
+        b, _ = fs.quante_di_ripasso(18805, 40, 10000)
+        self.assertEqual(a, b)
+
+    def test_the_saturation_point_is_where_the_two_meet(self):
+        # pool/nuove = 10000/18805 = 0.5317...: sotto decide il rapporto, sopra il pool
+        quante, richieste = fs.quante_di_ripasso(18805, 10000 / 18805, 10000)
+        self.assertEqual(quante, richieste)
+
+    def test_a_ratio_below_one_is_honoured(self):
+        quante, richieste = fs.quante_di_ripasso(18805, 0.5, 10000)
+        self.assertEqual((quante, richieste), (9402, 9402))
+
+
 class TestRunRecord(unittest.TestCase):
     """finetune.json e' cio' che resta di una corsa quando si confrontano due
     esperimenti a distanza di giorni. Una leva che non compare li rende

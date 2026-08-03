@@ -27,6 +27,7 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 17 | stub di torch di un file di test ↔ stub degli altri file | `_install_stubs()` aumenta il modulo già presente invece di sostituirlo | ✅ |
 | 18 | stratificazione del pool di ripasso ↔ campione che la sonda ne estrae | `head -1000` sul pool: **nessun test**, e la procedura è stata corretta a mano | ⚠️ |
 | 19 | numeri registrati ↔ scala dell'esperimento che li ha prodotti | i numeri della sonda e quelli del run pieno vivevano nella stessa tabella — **nessun test** | ⚠️ |
+| 20 | leva tarata sulla sonda ↔ leva che agisce davvero nella corsa piena | `quante_di_ripasso()` distingue righe *richieste* e *usate*, e il training avvisa quando il pool satura; `test_finetune_security.py::TestRehearsalSaturation` | ✅ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -75,6 +76,11 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   suo stesso campione rendeva inevitabile in ogni configurazione. Il troncamento serviva
   a rendere veloce la sonda e non serviva a niente: il ripasso estrae comunque 800
   righe, quindi leggere il pool intero costa uguale.
+- **#20** — a scala piena `--rehearsal-ratio 4` chiede 18.805 × 4 = 75.220 righe da un
+  pool che ne ha 10.000: le prende tutte. La selezione stratificata non seleziona nulla,
+  e `--rehearsal-strategy` non ha effetto. Cioè: la leva che ha salvato la sonda —
+  e su cui è stato speso un commit intero — **nella corsa vera non è collegata a
+  niente**. Il ripasso satura sopra ratio ≈ 0,53, e nessun messaggio lo dice.
 - **#19** — nella stessa tabella convivevano numeri della sonda (200 righe di
   addestramento) e numeri del run pieno (18.805), senza che la colonna lo dicesse.
   Leggendoli come confrontabili si conclude che una ricetta «non si riproduce», mentre
