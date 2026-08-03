@@ -29,6 +29,7 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 19 | numeri registrati ↔ scala dell'esperimento che li ha prodotti | i numeri della sonda e quelli del run pieno vivevano nella stessa tabella — **nessun test** | ⚠️ |
 | 20 | leva tarata sulla sonda ↔ leva che agisce davvero nella corsa piena | `quante_di_ripasso()` distingue righe *richieste* e *usate*, e il training avvisa quando il pool satura; `test_finetune_security.py::TestRehearsalSaturation` | ✅ |
 | 21 | fusione delle entità adiacenti in **valutazione** ↔ merge dell'**app** | `_fuse_adjacent()` allinea l'app a `normalize_entities()`; `test_analyze_policy.py::TestAdjacentSpansAreFused` | ✅ |
+| 22 | popolazione su cui il numero è misurato ↔ popolazione d'uso | `TIME` 0.950 sul congelato e 0 su 9 su un documento vero — **nessun test**, si trova solo usando il tool | ⚠️ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -105,6 +106,8 @@ dovrebbero coincidere e non coincidono — perché merita di essere ricordato:
 `predict_entities` restituiva `' Stefano Fabbri'` invece di `'Stefano Fabbri'`. Un
 carattere di differenza fra lo span del tokenizer e quello del gold, e `FULLNAME`,
 `CITY` e `ORG` a **0.000**.
+
+Il metodo che tiene insieme questo registro sta in [METODO.md](METODO.md).
 
 ## Perché non basta rileggere il codice
 

@@ -4,6 +4,73 @@ Procedura per il fine-tuning sui documenti di sicurezza, pensata per essere eseg
 su un pod GPU. Ogni comando e' verificabile: se un numero non viene come descritto,
 fermarsi invece di proseguire.
 
+---
+
+## LA RICETTA — quella che ha superato il test congelato (2026-08-03)
+
+Non e' una proposta: e' la configurazione esatta del modello pubblicato, con i suoi
+numeri. Le alternative provate e scartate stanno in fondo alla sezione.
+
+```bash
+python src/data_pipeline/generate_cyber_pii.py -n  1200 --split eval
+python src/data_pipeline/generate_cyber_pii.py -n 30000 --split train \
+    --max-tag-repeat 2 --out dataset/synthetic/security_train_bilanciato.jsonl
+
+python src/training/preflight.py \
+    --train dataset/synthetic/security_train_bilanciato.jsonl \
+    --eval  dataset/synthetic/synthetic_security_it_plain_eval.jsonl \
+    --rehearsal dataset/subsets/train_subset_10k.jsonl --max-len 2048
+
+python src/training/finetune_security.py \
+    --train dataset/synthetic/security_train_bilanciato.jsonl \
+    --rehearsal dataset/subsets/train_subset_10k.jsonl \
+    --rehearsal-strategy stratified --rehearsal-ratio 4 \
+    --epochs 3 \
+    --out models/rizzo-pii-0.3B-security
+```
+
+18.805 righe nuove + 10.000 di ripasso = 28.805 esempi, batch efficace 16, lr 2e-5,
+`max_len` 2048. **~26 minuti su una NVIDIA L4** (23 GB, picco 14 GB).
+
+| | recall | precision | PII in chiaro |
+|---|--:|--:|--:|
+| checkpoint di partenza | 0.806 | 0.738 | 1.721 |
+| **dopo** | **0.858** | **0.795** | **1.254** |
+
+Test congelato, 4.000 righe mai viste, 8.849 entita', **una sola esecuzione**. Regola
+A superata (559 recuperate contro 92 perse, p < 1e-6), B e C superate: cinque tag
+migliorano, quattordici invariati, **zero peggiorano**.
+
+### Le quattro leve, e perche' 3 epoche
+
+| variante | micro recall | `CATASTO` | `ID_DOC` | esito |
+|---|--:|--:|--:|---|
+| 1 epoca | 0.833 | 0.580 | 0.814 | regola B violata |
+| 2 epoche | **0.856** | **0.597** | 0.857 | regola B violata (`ID_DOC`) |
+| **3 epoche** | 0.844 | 0.464 | **0.948** | **passa** |
+| `--freeze-encoder` | **0.696** | **0.000** | 0.581 | catastrofica |
+| `--lr 5e-6` | 0.801 | 0.348 | 0.824 | sotto la baseline |
+
+`ID_DOC` e `ZIPCODE` si muovono in **direzioni opposte** sull'asse delle epoche: il
+primo e' dimenticanza e si recupera con i passaggi sul ripasso, il secondo e'
+interferenza e peggiora con quelli sul genere nuovo. Non esiste un ottimo, esiste una
+curva; 3 epoche e' il punto in cui nessun tag decisivo arretra.
+
+### Tre cose che NON funzionano, misurate
+
+- **`--freeze-encoder` e' la variante peggiore, non la piu' forte.** `CATASTO` a
+  **0.000**, 424 entita' perse contro 21. La dimenticanza non avviene nell'encoder ma
+  **nella testa**, che congelando l'encoder resta l'unica cosa addestrabile ed e'
+  condivisa da tutti e 22 i tag.
+- **`--rehearsal-ratio` e' inerte a scala piena.** 18.805 x 4 = 75.220 righe da un
+  pool di 10.000: le prende tutte. Sopra ratio 0.53 la leva non e' collegata a niente,
+  e con essa `--rehearsal-strategy`. Ora il training lo dice.
+- **Le righe interamente `O` restano nel training.** Sono il 15,8% del corpus, e sono
+  meta' del motivo per cui il fine-tuning esiste (le ~2.700 entita' inventate su
+  stringhe tecniche). Scartarle addestrava contro l'obiettivo dichiarato.
+
+---
+
 ## Cosa si sta facendo, e cosa no
 
 **Si fa** il fine-tuning del checkpoint gia' rilasciato sul dataset `plain`, a
