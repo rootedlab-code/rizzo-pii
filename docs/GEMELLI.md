@@ -25,6 +25,8 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 15 | leve della riga di comando ↔ `finetune.json` | `scheda_corsa()` parte da `vars(args)`: nessuna leva può mancare **per costruzione**, e `TestRunRecord` lo sorveglia | ✅ |
 | 16 | parametri che `--freeze-encoder` dichiara ↔ quelli che aggancia | `test_finetune_security.py::TestFreezeEncoder` asserisce l'insieme **esatto** | ✅ |
 | 17 | stub di torch di un file di test ↔ stub degli altri file | `_install_stubs()` aumenta il modulo già presente invece di sostituirlo | ✅ |
+| 18 | stratificazione del pool di ripasso ↔ campione che la sonda ne estrae | `head -1000` sul pool: **nessun test**, e la procedura è stata corretta a mano | ⚠️ |
+| 19 | numeri registrati ↔ scala dell'esperimento che li ha prodotti | i numeri della sonda e quelli del run pieno vivevano nella stessa tabella — **nessun test** | ⚠️ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -63,6 +65,20 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
 - **#17** — il primo file di test che registra uno stub di `torch` vince, perché tutti
   usano `setdefault`. Il mio arrivava dopo, il suo `torch.utils` non veniva mai
   installato, e tre test fallivano **solo dentro la suite completa** — verdi da soli.
+- **#18, il più caro di tutti** — la sonda prendeva il ripasso da `head -1000` del
+  pool. In quelle prime 1000 righe ci sono **zero** righe con `CATASTO`, zero con
+  `DOCID`, zero con `TARGA`; il pool intero ne ha 682, 1.556 e 424. Il ripasso
+  stratificato esiste per coprire i tag assenti dai dati nuovi, e `stratified_rehearsal`
+  costruisce quell'elenco **dal pool**: un tag assente dal pool non risultava scoperto,
+  risultava *inesistente*. Con il pool intero i tag da proteggere passano da 6 a **11**.
+  Per settimane la sonda ha bocciato ricette sul crollo di `CATASTO` — un crollo che il
+  suo stesso campione rendeva inevitabile in ogni configurazione. Il troncamento serviva
+  a rendere veloce la sonda e non serviva a niente: il ripasso estrae comunque 800
+  righe, quindi leggere il pool intero costa uguale.
+- **#19** — nella stessa tabella convivevano numeri della sonda (200 righe di
+  addestramento) e numeri del run pieno (18.805), senza che la colonna lo dicesse.
+  Leggendoli come confrontabili si conclude che una ricetta «non si riproduce», mentre
+  semplicemente non era mai stato eseguito lo stesso esperimento.
 
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:

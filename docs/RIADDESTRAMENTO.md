@@ -164,22 +164,32 @@ dove metterli.
 Costa cinque minuti su CPU e ha gia' bocciato la ricetta iniziale. Non e' una
 formalita': e' il motivo per cui il pod non va acceso adesso.
 
-> **I numeri di questa sezione sono da rifare (2026-08-03).** Sono stati misurati
-> quando `build_dataset()` scartava le righe interamente `O`: **2.980 righe, il
-> 15,8% del corpus bilanciato**. Ora entrano nel training — sono deliberate, e sono
-> meta' del motivo per cui il fine-tuning esiste (vedi `docs/GEMELLI.md` #13).
-> Il corpus di addestramento e' quindi piu' grande del 15,8% e ha una distribuzione
-> diversa: **le tabelle qui sotto non sono piu' confrontabili con una corsa di
-> oggi**, e la sonda va rieseguita prima di accendere il pod. Restano valide come
-> registro di cio' che la sonda ha gia' saputo bocciare.
+> **IL POOL DI RIPASSO NON SI TRONCA (misurato il 2026-08-03).** La procedura
+> prendeva `head -1000` di `train_subset_10k.jsonl`. In quelle prime 1000 righe ci
+> sono **zero** righe con `CATASTO`, **zero** con `DOCID`, **zero** con `TARGA`; il
+> pool intero ne ha rispettivamente 682, 1.556 e 424.
+>
+> Il ripasso stratificato esiste *apposta* per coprire i tag che i dati nuovi non
+> contengono, e `CATASTO` e' il primo di quella lista. Troncando il pool, la sonda
+> non poteva coprirlo: era **cieca proprio al meccanismo che doveva collaudare**, e
+> il crollo di `CATASTO` che riportava era un artefatto del suo campione.
+>
+> Il troncamento serviva a rendere veloce la sonda, ma non serviva a niente: il
+> ripasso ne estrae comunque 800 righe, quindi leggere il pool intero **non cambia
+> il costo dell'addestramento**. Il comando qui sotto e' gia' corretto.
+>
+> Vale per qualunque sonda futura, non solo per questa: se il campione della sonda
+> non e' stratificato come il set completo, la sonda sceglie a caso sulle classi
+> che non vede — e lo fa in silenzio.
 
 ```bash
-head -200  dataset/synthetic/synthetic_security_it_plain_train.jsonl > /tmp/mini_train.jsonl
-head -1000 dataset/subsets/train_subset_10k.jsonl                    > /tmp/mini_ripasso.jsonl
+head -200 dataset/synthetic/security_train_bilanciato.jsonl > /tmp/mini_train.jsonl
 
 python src/training/finetune_security.py \
-    --train /tmp/mini_train.jsonl --rehearsal /tmp/mini_ripasso.jsonl \
-    --out /tmp/sonda --epochs 1 --batch 4
+    --train /tmp/mini_train.jsonl \
+    --rehearsal dataset/subsets/train_subset_10k.jsonl \
+    --rehearsal-strategy stratified --rehearsal-ratio 4 \
+    --out /tmp/sonda --epochs 1 --batch 4 --accum 1
 
 python src/training/predict_entities.py dataset/validation/validation_real.jsonl \
     --out /tmp/legale_sonda.jsonl --limit 300 --model /tmp/sonda
@@ -197,6 +207,73 @@ guadagno, pesato, copriva le perdite.
 Il micro sul legale non deve scendere, Se scende su 180 esempi,
 scendera' molto di piu' su 26.851 per due epoche — la sonda e' 150 volte piu'
 piccola dell'addestramento vero.
+
+### La rimisura del 2026-08-03, e cosa ha invalidato
+
+Rieseguita la sonda dopo che le righe interamente `O` hanno smesso di essere
+scartate (2.980 righe, il 15,8% del corpus bilanciato — vedi `GEMELLI.md` #13).
+Misurato su **2.000 righe / 4.346 entita'** della validation legale, sistema
+completo (modello + rete regex core), con la baseline **riprodotta esatta**
+(`0.789` recall, `0.718` precision: le stesse cifre registrate il 2026-08-02, quindi
+l'apparato di misura non e' cambiato).
+
+| configurazione della sonda | micro recall | precision | `CATASTO` (345 gold) |
+|---|--:|--:|--:|
+| baseline (rilasciato) | **0.789** | **0.718** | 0.371 |
+| ricetta registrata (righe tutto-`O` scartate, `max_len` 512) | 0.781 | 0.719 | 0.197 |
+| ricetta attuale (righe tutto-`O` incluse, `max_len` 2048) | 0.776 | 0.711 | 0.183 |
+
+**McNemar esatto appaiato** sulle 4.346 entita' — il test che il criterio richiede,
+non intervalli separati:
+
+| confronto | solo A | solo B | p | esito |
+|---|--:|--:|--:|---|
+| baseline vs registrata | 136 | 101 | 0.027 | diversi |
+| baseline vs attuale | 116 | 61 | 0.000043 | diversi |
+| **registrata vs attuale** | 78 | 58 | **0.103** | **indistinguibili** |
+
+Due conclusioni, di peso molto diverso.
+
+**Le righe tutto-`O` e `max_len` 2048 non spiegano niente.** p = 0.103 fra le due
+configurazioni, su un campione che invece separa benissimo entrambe dalla baseline
+(p = 0.00004). Chi cercasse in quella modifica la causa di una regressione starebbe
+inseguendo rumore.
+
+**Ma nessuno di questi numeri dice qualcosa sulla ricetta**, perche' sono stati
+prodotti con il pool di ripasso troncato (riquadro sopra): senza una riga di
+`CATASTO` da cui pescare, il tag che decide era condannato in partenza in *tutte* le
+configurazioni. Restano validi solo come misura di **due sonde fra loro**, ed e'
+esattamente la domanda a cui rispondono.
+
+Una sonda a 300 righe non basta nemmeno per quello: sulle stesse tre configurazioni,
+a `--limit 300` (634 entita') il test appaiato le dava **tutte e tre
+indistinguibili** (p = 0.265, 0.053, 0.678). La differenza minima rilevabile va
+calcolata prima di lanciare, non scoperta dopo: a 634 entita' questa sonda non puo'
+decidere ne' assolvere niente.
+
+### La stessa sonda, con il pool di ripasso non troncato
+
+Unico asse cambiato: `--rehearsal dataset/subsets/train_subset_10k.jsonl` invece di
+`head -1000`. Stessi dati nuovi, stesso ripasso 4:1 stratificato, stesso seed,
+stesso numero di esempi (1.000) e quindi stesso numero di passi.
+
+| | micro recall | precision | `CATASTO` | McNemar vs baseline |
+|---|--:|--:|--:|---|
+| baseline (rilasciato) | 0.789 | 0.718 | 0.371 | — |
+| sonda, pool **troncato** | 0.776 | 0.711 | 0.183 (−0.188) | 116/61, **p = 0.000043** |
+| sonda, pool **intero** | **0.785** | **0.716** | **0.325 (−0.046)** | 81/65, **p = 0.214** |
+
+`CATASTO` recupera **14 punti** e il sistema passa da *significativamente peggiore
+della baseline* a *indistinguibile da essa*. Il verdetto della sonda non descriveva
+la ricetta: descriveva il proprio campione.
+
+Vale la pena dirlo per esteso, perche' e' il difetto piu' costoso di tutto il
+lavoro. `stratified_rehearsal()` costruisce l'elenco dei tag da proteggere
+**leggendo il pool**. Un tag assente dal pool non risulta scoperto: risulta
+inesistente, e nessuno lo protegge. Con `head -1000` erano invisibili `CATASTO`,
+`DOCID` e `TARGA` — i tag da proteggere passavano da 11 a 6 — e il crollo di
+`CATASTO` che la sonda riportava era inevitabile in *ogni* configurazione, quindi
+non poteva distinguerne nessuna.
 
 ### Cosa ha gia' detto la sonda (2026-08-02)
 
