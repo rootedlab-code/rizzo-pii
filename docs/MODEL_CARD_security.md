@@ -1,98 +1,145 @@
 ---
-license: apache-2.0
+license: mit
 language:
   - it
 library_name: transformers
 pipeline_tag: token-classification
+base_model: rizzoaiacademy/rizzo-pii-0.3B
 tags:
   - pii
   - anonymization
   - italian
   - token-classification
-base_model: rizzoaiacademy/rizzo-pii-0.3B
+  - security
 ---
 
 # rizzo-pii-0.3B-security
 
-Fine-tuning del checkpoint `rizzoaiacademy/rizzo-pii-0.3B` sul **genere documentale
-"sicurezza"** — verbali d'incidente, timeline forensi, ticket, estratti di log — a
-**tassonomia invariata**: `num_labels` non cambia e il modello resta compatibile con
-l'applicazione e con i profili di policy esistenti.
+Fine-tuning di [`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)
+sul **genere documentale "sicurezza"** — verbali d'incidente, timeline forensi, ticket,
+estratti di log — a **tassonomia invariata**: `num_labels` non cambia, quindi il
+modello resta compatibile con l'applicazione, con i 22 tag e con i profili di policy
+esistenti.
 
 Serve ad anonimizzare documenti **in locale** prima di mandarli a un LLM esterno.
 
-## A cosa serve, e a cosa no
+## Cosa cambia rispetto al modello di partenza
 
-**Serve** a ridurre le PII lasciate in chiaro in documenti italiani di ambito legale e
-di sicurezza. Il vincolo che conta e' il **falso negativo**: un dato personale non
-mascherato esce dalla macchina, un falso positivo maschera soltanto di piu'.
+Il checkpoint originale è addestrato su prosa legale italiana. Sui documenti di
+sicurezza peggiorava proprio dove il modello è indispensabile — cioè sui tag che la
+rete di regex **non** copre — e aveva due lacune misurate:
 
-**Non serve** come garanzia di anonimizzazione completa. Nessun modello di token
-classification lo e'. In produzione va affiancato **sempre** alla rete di
-regex+checksum, che su codice fiscale, partita IVA, IBAN e carte di credito e' esatta
-dove il modello frammenta.
+1. **`DATE` a recall 0.090.** Addestrato su date fra il 1955 e il 2005 (l'intervallo
+   delle date di nascita), troncava l'anno: su `24/01/2024` etichettava `24/01/20`. Il
+   formato ISO non lo riconosceva affatto.
+2. **~2.700 entità inventate** su stringhe tecniche mai viste: 866 `IBAN`, 1.140
+   `TIME`, 703 `ID_DOC` prodotti da hash, identificativi cloud e indirizzi MAC.
 
-**Non e' stato addestrato** sui tag cyber (IP, hash, wallet, identificativi cloud):
-quelli restano coperti dai detector deterministici, che su di essi stanno a recall
-0.911 con precision 0.989. Nel dataset di addestramento quei valori compaiono
-**senza etichetta**, di proposito: servono a insegnare che una stringa tecnica e' `O`.
+Questo modello chiude entrambe.
 
 ## Risultati
 
-Misurati su un **test congelato** di 4.000 righe mai viste durante lo sviluppo,
-8.849 entita', eseguito **una volta sola** contro un criterio scritto e depositato
-prima di guardare i numeri. Sistema completo (modello + rete regex core), come gira
-in produzione.
+Misurati su un **test congelato** di 4.000 righe mai viste durante lo sviluppo
+(8.849 entità), eseguito **una volta sola** contro un criterio scritto e depositato
+*prima* di guardare i numeri. Sistema completo — modello + rete regex/checksum core —
+come gira in produzione.
 
 | | recall | precision | F1 | PII lasciate in chiaro |
 |---|--:|--:|--:|--:|
-| checkpoint di partenza | 0.806 | 0.738 | 0.770 | 1.721 |
+| `rizzo-pii-0.3B` | 0.806 | 0.738 | 0.770 | 1.721 |
 | **questo modello** | **0.858** | **0.795** | **0.826** | **1.254** |
 
 **467 PII in meno** lasciate in chiaro, e 579 falsi positivi in meno.
 
-Confronto **appaiato** (McNemar esatto sulle stesse entita', non intervalli
-separati): **559 entita' recuperate contro 92 perse**, p < 1e-6.
+Il confronto è **appaiato** (McNemar esatto sulle stesse entità, non due intervalli
+affiancati): **559 entità recuperate contro 92 perse**, p < 1e-6.
 
-Per tag, fra i 19 con almeno 100 entita' nel gold: cinque migliorano in modo
-statisticamente distinguibile — `DATE` +254, `DOCID` +69, `BUILDINGNUM` +35,
-`CATASTO` +33, `ID_DOC` +18 — quattordici restano invariati, **nessuno peggiora**.
+Per tag, fra i 19 con almeno 100 entità nel gold: cinque migliorano in modo
+statisticamente distinguibile, quattordici restano invariati, **nessuno peggiora**.
 
-Il guadagno maggiore e' su `DATE`, che il checkpoint di partenza gestiva male fuori
-dall'intervallo di date su cui era stato addestrato: troncava l'anno e non
-riconosceva il formato ISO.
+| tag | entità recuperate |
+|---|--:|
+| `DATE` | +254 |
+| `DOCID` | +69 |
+| `BUILDINGNUM` | +35 |
+| `CATASTO` | +33 |
+| `ID_DOC` | +18 |
 
-## Come e' stato addestrato
+Sul genere sicurezza il recall passa da 0.893 a **0.939**, e `DATE` da 0.090 a
+**0.959**.
+
+> I numeri qui sopra **non sono confrontabili** con il micro-F1 dichiarato dal modello
+> di partenza: quello è misurato sulla sua validation con il suo apparato, questo su un
+> campione cieco diverso e a livello di sistema. L'unico confronto valido è quello
+> riportato in tabella, dove entrambi i modelli sono stati misurati sullo stesso
+> hardware, sulle stesse righe, nello stesso momento.
+
+## Uso
+
+```python
+from transformers import pipeline
+
+nlp = pipeline("token-classification",
+               model="dr3x1/rizzo-pii-0.3B-security",
+               aggregation_strategy="simple")
+nlp("Il 24/01/2024 l'analista Mario Rossi ha isolato l'host colpito.")
+```
+
+In produzione va affiancato **sempre** alla rete regex+checksum: su codice fiscale,
+partita IVA, IBAN e carte di credito quella è esatta, mentre il modello frammenta gli
+identificatori lunghi (`RCCMRT60T58H703I` esce come `CF`+`CF`+`ID_DOC`+…). Misurato:
+`CF` passa da 0.018 col solo modello a 1.000 col checksum.
+
+## A cosa NON serve
+
+- **Non è una garanzia di anonimizzazione.** Nessun modello di token classification lo
+  è. Quattro tag restano sotto 0.5 di recall anche dopo il fine-tuning:
+  `CREDITCARDNUMBER`, `IBAN`, `AMOUNT`, `ZIPCODE`.
+- **Non copre i tag cyber** (IP, hash, wallet, identificativi cloud, ASN, MAC). Restano
+  ai detector deterministici, che su di essi stanno a recall 0.911 con precision 0.989:
+  un modello dovrebbe battere quel campione per giustificare il costo. Nel dataset di
+  addestramento quei valori compaiono **senza etichetta**, di proposito — servono a
+  insegnare che una stringa tecnica è `O`.
+- **Non è validato fuori dall'italiano.** Il modello di partenza è multilingue, questo
+  fine-tuning non ha rimisurato le altre sette lingue.
+
+## Come è stato addestrato
 
 - Corpus di sicurezza sintetico: 18.805 righe da 196 template, con cap di ripetizione
   per scheletro e riequilibrio dei tag sovrarappresentati.
 - **Ripasso** del dominio originale: 10.000 righe. Senza, il modello dimentica —
-  misurato: bastano 180 esempi di solo genere sicurezza per far crollare `TARGA` a
-  zero.
+  misurato: 180 esempi di solo genere sicurezza bastano a portare `TARGA` a zero.
 - 3 epoche, batch efficace 16, learning rate 2e-5, lunghezza massima 2.048 token
-  (misurata: la riga piu' lunga dei corpora e' 1.861).
+  (misurata: la riga più lunga dei corpora è 1.861).
+
+Il numero di epoche non è una scelta di comodo: `ID_DOC` e `ZIPCODE` si muovono in
+direzioni opposte su quell'asse — il primo è dimenticanza e si recupera con più
+passaggi sul ripasso, il secondo è interferenza e peggiora con più passaggi sul genere
+nuovo. Tre epoche è il punto in cui nessun tag decisivo arretra.
 
 **I dati sintetici non contengono PII reali.** L'LLM scrive solo la prosa con
-segnaposto, il codice inietta i valori: cosi' le etichette sono esatte per
-costruzione, i checksum sono validi, e nessun dato personale vero puo' essere
-rigurgitato. Indirizzi, domini, ASN e MAC vengono **per costruzione** dagli intervalli
-riservati alla documentazione (RFC 5737, 1918, 3849, 2606, 5398, 7042), verificato su
-ogni riga prodotta.
+segnaposto, il codice inietta i valori: le etichette sono esatte per costruzione, i
+checksum sono validi, e nessun dato personale vero può essere rigurgitato. Indirizzi,
+domini, ASN e MAC vengono **per costruzione** dagli intervalli riservati alla
+documentazione (RFC 5737, 1918, 3849, 2606, 5398, 7042), verificato su ogni riga
+prodotta.
 
-## Limiti dichiarati
+Limite dichiarato: i dati sono al 100% da template. Manca l'iniezione in frasi reali,
+che è la difesa migliore contro l'overfit strutturale — per il genere sicurezza non
+esiste un corpus pubblico utilizzabile.
 
-- **Validation solo italiana**: le altre lingue del modello di partenza non sono state
-  rimisurate.
-- **Dati di addestramento al 100% da template.** Manca l'iniezione in frasi reali, che
-  e' la difesa migliore contro l'overfit strutturale: per il genere sicurezza non
-  esiste un corpus pubblico utilizzabile.
-- Tag deboli che restano tali: `CREDITCARDNUMBER`, `IBAN`, `AMOUNT` e `ZIPCODE` stanno
-  sotto 0.5 di recall anche dopo il fine-tuning.
-- Il test congelato e' stato speso. Una ricetta successiva va misurata sulla riserva
-  da 1.000 righe, e dopo quella serve un campione cieco da una fonte diversa.
+## Licenza e provenienza
 
-## Provenienza
+**MIT**, come il progetto da cui deriva.
 
-Lavoro derivato da [`Rizzo-AI-Academy/rizzo-pii`](https://github.com/Rizzo-AI-Academy/rizzo-pii)
-di Simone Rizzo, da cui vengono il modello di partenza, la tassonomia a 22 tag e la
-pipeline di generazione sintetica. Fine-tuning e valutazione di `rootedlab-code`.
+Catena completa: [`jhu-clsp/mmBERT-base`](https://huggingface.co/jhu-clsp/mmBERT-base)
+→ [`rizzoaiacademy/rizzo-pii-0.3B`](https://huggingface.co/rizzoaiacademy/rizzo-pii-0.3B)
+→ questo modello.
+
+Da [`Rizzo-AI-Academy/rizzo-pii`](https://github.com/Rizzo-AI-Academy/rizzo-pii) di
+Simone Rizzo vengono il checkpoint di partenza, la tassonomia a 22 tag, la pipeline di
+generazione sintetica e la rete regex+checksum. Copyright del progetto originale
+© 2026 Simone Rizzo — Rizzo AI Academy.
+
+Fine-tuning sul genere sicurezza, dataset sintetico di dominio e valutazione:
+`rootedlab-code`.
