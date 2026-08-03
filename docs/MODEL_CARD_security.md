@@ -68,6 +68,13 @@ statisticamente distinguibile, quattordici restano invariati, **nessuno peggiora
 Sul genere sicurezza il recall passa da 0.893 a **0.939**, e `DATE` da 0.090 a
 **0.959**.
 
+> **I numeri valgono per il sistema con la fusione degli span adiacenti** (`_fuse_adjacent`
+> in `app.py`, dal 2026-08-03). Senza, questo modello spezza `FULLNAME` nel **9,9%** dei
+> casi contro lo **0,3%** del checkpoint di partenza, e i nomi escono come due
+> segnaposto invece di uno: su quel singolo asse il modello di partenza e' migliore.
+> La misura non lo mostrava perche' l'attrezzatura di valutazione fondeva gia' mentre
+> l'app no.
+>
 > I numeri qui sopra **non sono confrontabili** con il micro-F1 dichiarato dal modello
 > di partenza: quello è misurato sulla sua validation con il suo apparato, questo su un
 > campione cieco diverso e a livello di sistema. L'unico confronto valido è quello
