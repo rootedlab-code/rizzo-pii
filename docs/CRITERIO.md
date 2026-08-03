@@ -6,16 +6,35 @@ stratificato. Il riuso adattivo di un holdout ne consuma la validita' anche senz
 barare (Dwork et al., Science 2015), quindi tutti i numeri prodotti su quelle righe
 vanno letti come **esplorativi**, non come misura finale.
 
-Il test congelato e' `dataset/validation/test_congelato_legale.jsonl` — righe
-4000-6000 della validation, **mai guardate**. Impronta in `test_congelato.sha256`.
+Il test congelato e' `dataset/validation/test_congelato_legale.jsonl`: **4.000 righe,
+posizioni 2000-5999 della validation**, mai guardate. Impronta in
+`test_congelato.sha256`.
+
+La riserva e' `dataset/validation/test_riserva_legale.jsonl`: **1.000 righe, posizioni
+6000-6999**, mai guardate nemmeno da questo criterio. Impronta in
+`test_riserva.sha256`.
+
+> **Ritagliate il 2026-08-03, prima di eseguire alcunche'.** Il file conteneva
+> **5.000** righe — le posizioni 2000-6999, cioe' tutto il complemento delle
+> esplorative — mentre questo documento dichiarava «righe 4000-6000» e prometteva
+> come riserva le «righe 6000-7000, che restano». Quelle righe non restavano: erano
+> gia' dentro il test congelato. Eseguendolo com'era, un fallimento avrebbe lasciato
+> **zero** campioni ciechi per la ricetta successiva.
+>
+> Impronta del file originale da 5.000 righe, per tracciabilita':
+> `17e88bd7167e80e35a7c408c3230a817758a909a3127bad8b15f3121bde35916`.
+>
+> Sovrapposizione fra congelato e righe 0-2000: **1 riga su 5.000**, un testo
+> duplicato dentro la validation stessa. Misurata, non assunta.
 
 ## Regole
 
 1. Si esegue **una volta sola**, sul candidato scelto usando le righe 0-2000.
 2. Il criterio e' scritto qui sotto e non si tocca dopo aver visto il risultato.
 3. Se il candidato fallisce, non si sceglie il secondo classificato sullo stesso
-   test: si torna alle righe 0-2000, si cambia ricetta, e serve un nuovo test
-   congelato (righe 6000-7000, che restano).
+   test: si torna alle righe 0-2000, si cambia ricetta, e si spende **la riserva**.
+   Dopo quella non c'e' altro: un terzo tentativo richiede un campione cieco da una
+   fonte diversa, non un altro ritaglio di questa validation.
 
 ## Criterio
 

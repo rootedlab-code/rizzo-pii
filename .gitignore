@@ -29,6 +29,7 @@ dataset/contributions/
 # ripasso, che nasce dalle 745k righe delle quattro fonti).
 !dataset/synthetic/security_templates.json
 !dataset/validation/test_congelato.sha256
+!dataset/validation/test_riserva.sha256
 
 # ─── Desktop app build — PyInstaller ───
 build/
