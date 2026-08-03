@@ -26,10 +26,43 @@ congelato e con la rete regex core attiva come in produzione:
   recuperate che perse. Non il micro: due configurazioni con micro 0.793 e 0.797 sono
   risultate una indistinguibile dalla baseline (p = 0.280) e l'altra un miglioramento
   reale (p = 0.006).
-- **B.** Nessun tag con almeno 100 entita' nel gold perde piu' di **0.02** di recall.
-  I tag sotto 100 entita' si riportano ma non decidono: l'intervallo e' troppo largo.
-- **C.** `CATASTO`, `ID_DOC` e `ZIPCODE` — i tre che degradano piu' spesso — non
-  scendono sotto la baseline. Sono i canarini.
+- **B.** Nessun tag con almeno 100 entita' nel gold peggiora in modo **statisticamente
+  distinguibile**: McNemar appaiato sulle sole entita' di quel tag, p < 0.05 **e** piu'
+  perse che recuperate. I tag sotto 100 entita' si riportano ma non decidono.
+
+      python src/training/mcnemar.py <gold> --a <baseline> --b <candidato> \
+          --limit <N> --labels ID_DOC
+
+- **C.** `CATASTO`, `ID_DOC` e `ZIPCODE` — i tre che degradano piu' spesso — si
+  guardano per primi. Sono i canarini, ma decidono **con la stessa regola B**: un
+  canarino con meno di 100 entita' segnala, non boccia.
+
+I conteggi che contano sono quelli **del test congelato**, non quelli delle righe
+0-2000: un tag puo' stare sopra la soglia in un campione e sotto nell'altro.
+
+### Perche' B non e' piu' una soglia fissa (riscritta il 2026-08-03)
+
+Diceva: «nessun tag sopra 100 entita' perde piu' di **0.02** di recall». A 210 entita'
+l'intervallo di confidenza al 95% sul recall e' circa ±0.045: **la soglia stava dentro
+il rumore**. Una regola che si puo' far scattare per caso, prima o poi boccia un
+modello buono o ne accetta uno cattivo, e in entrambi i casi il verdetto lo decide il
+campione invece del modello.
+
+Misurato sulle righe 0-2000, il test appaiato e la soglia fissa **non concordano**:
+
+| tag | gold | recall | soglia 0.02 | McNemar appaiato |
+|---|--:|--:|---|---|
+| `ID_DOC` | 210 | 0.905 → 0.857 | bocciato (−0.048) | 12 perse / 2 recuperate, **p = 0.013** → bocciato |
+| `ZIPCODE` | 87 | 0.379 → 0.322 | bocciato (−0.057) | 9 perse / 4 recuperate, **p = 0.267** → non distinguibile |
+
+Su `ZIPCODE` la soglia bocciava una differenza che vale nove entita' su ottantasette e
+che il test non sa separare dal caso. Su `ID_DOC` le due regole concordano — ma
+concordare su un caso non rende affidabile una soglia che non e' calibrata sulla
+taglia del campione.
+
+**Questa riscrittura e' avvenuta PRIMA di guardare il risultato che deve giudicare.**
+E' l'unico momento in cui si puo' cambiare un criterio senza svuotarlo: dopo, la
+scelta di quale regola applicare la fa il numero che e' uscito.
 
 Se A passa ma B o C no, l'esito e' **uno scambio**, non un miglioramento, e la
 decisione se accettarlo e' dell'utente, non automatica.
