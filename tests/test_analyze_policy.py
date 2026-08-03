@@ -188,3 +188,60 @@ class TestPolicyEndpoint(AnalyzeTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAdjacentSpansAreFused(unittest.TestCase):
+    """Il modello frammenta: 'Giulia Moretti' usciva come [FULLNAME_1] [FULLNAME_2],
+    che per un LLM a valle sono due persone diverse.
+
+    Il difetto era invisibile perche' normalize_entities() in valutazione FONDE gia',
+    mentre _merge() nell'app no: la misura diceva 'FULLNAME migliora' e il prodotto
+    peggiorava. Misurato su 2.000 righe: FULLNAME spezzato nel 9,9% dei casi."""
+
+    def fondi(self, ents, testo):
+        return [(e["label"], testo[e["start"]:e["end"]])
+                for e in app._fuse_adjacent(ents, testo)]
+
+    def ent(self, start, end, label, validated=False, source="modello"):
+        return {"label": label, "start": start, "end": end, "score": 0.9,
+                "validated": validated, "source": source}
+
+    def test_two_adjacent_model_spans_become_one(self):
+        testo = "Giulia Moretti ha firmato"
+        fusi = self.fondi([self.ent(0, 6, "FULLNAME"), self.ent(7, 14, "FULLNAME")], testo)
+        self.assertEqual(fusi, [("FULLNAME", "Giulia Moretti")])
+
+    def test_a_different_label_is_not_fused(self):
+        testo = "Roma Milano"
+        fusi = self.fondi([self.ent(0, 4, "CITY"), self.ent(5, 11, "ORG")], testo)
+        self.assertEqual(len(fusi), 2)
+
+    def test_words_in_between_block_the_fusion(self):
+        # 'Mario Rossi e Luigi Bianchi' sono due persone: la 'e' lo dice
+        testo = "Mario e Luigi"
+        fusi = self.fondi([self.ent(0, 5, "FULLNAME"), self.ent(8, 13, "FULLNAME")], testo)
+        self.assertEqual(len(fusi), 2)
+
+    def test_validated_spans_are_never_fused(self):
+        # due IP accanto sono due indirizzi, non uno lungo: fonderli li mascherebbe
+        # con un solo segnaposto e il dizionario perderebbe che erano distinti
+        testo = "203.0.113.1 203.0.113.2"
+        fusi = self.fondi([self.ent(0, 11, "IP", validated=True, source="regex"),
+                           self.ent(12, 23, "IP", validated=True, source="regex")], testo)
+        self.assertEqual(len(fusi), 2)
+
+    def test_three_fragments_collapse_into_one(self):
+        testo = "Maria Teresa Bianchi"
+        fusi = self.fondi([self.ent(0, 5, "FULLNAME"), self.ent(6, 12, "FULLNAME"),
+                           self.ent(13, 20, "FULLNAME")], testo)
+        self.assertEqual(fusi, [("FULLNAME", "Maria Teresa Bianchi")])
+
+    def test_a_newline_between_them_still_fuses(self):
+        testo = "Giulia\nMoretti"
+        fusi = self.fondi([self.ent(0, 6, "FULLNAME"), self.ent(7, 14, "FULLNAME")], testo)
+        self.assertEqual(len(fusi), 1)
+
+    def test_the_end_to_end_result_has_one_placeholder_per_name(self):
+        r = app.analyze("l'analista Giulia Moretti ha isolato l'host")
+        nomi = [s for s in r["segments"] if s.get("label") == "FULLNAME"]
+        self.assertLessEqual(len(nomi), 1)

@@ -372,7 +372,38 @@ def _merge(cands, text):
             e["end"] -= 1
     kept = [e for e in kept if e["end"] > e["start"]]
     kept.sort(key=lambda e: e["start"])
-    return kept
+    return _fuse_adjacent(kept, text)
+
+
+def _fuse_adjacent(kept, text):
+    """Fonde due span dello stesso tag separati da soli spazi.
+
+    Il modello frammenta: 'Giulia Moretti' esce come due FULLNAME adiacenti e
+    l'utente si ritrova `[FULLNAME_1] [FULLNAME_2]`, che per un LLM a valle sono due
+    persone diverse — cioe' proprio l'analizzabilita' che il tool deve preservare.
+    Misurato su 2.000 righe: FULLNAME spezzato nel 9,9% dei casi.
+
+    Il difetto restava invisibile perche' `normalize_entities()` in valutazione FONDE
+    gia' (deve: nel gold 'Mario'/'Rossi' sono GIVENNAME+SURNAME separati). Il numero
+    diceva 'FULLNAME migliora' mentre il prodotto peggiorava — la misura e l'app
+    avevano due semantiche diverse per la stessa cosa.
+
+    **Si fondono solo gli span NON validati.** Uno span validato e' completo per
+    costruzione: un IP e' un IP intero, un CF passa il checksum. Due di essi accanto
+    sono due entita' distinte, e fonderli maschererebbe `203.0.113.1 203.0.113.2` con
+    un solo segnaposto. Un span non validato viene dal modello e puo' essere un
+    pezzo."""
+    out = []
+    for e in kept:
+        prec = out[-1] if out else None
+        if (prec is not None and prec["label"] == e["label"]
+                and not prec["validated"] and not e["validated"]
+                and not text[prec["end"]:e["start"]].strip()):
+            prec["end"] = e["end"]
+            prec["score"] = min(prec["score"], e["score"])
+        else:
+            out.append(e)
+    return out
 
 
 def _norm(s):

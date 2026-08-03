@@ -28,6 +28,7 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 18 | stratificazione del pool di ripasso ↔ campione che la sonda ne estrae | `head -1000` sul pool: **nessun test**, e la procedura è stata corretta a mano | ⚠️ |
 | 19 | numeri registrati ↔ scala dell'esperimento che li ha prodotti | i numeri della sonda e quelli del run pieno vivevano nella stessa tabella — **nessun test** | ⚠️ |
 | 20 | leva tarata sulla sonda ↔ leva che agisce davvero nella corsa piena | `quante_di_ripasso()` distingue righe *richieste* e *usate*, e il training avvisa quando il pool satura; `test_finetune_security.py::TestRehearsalSaturation` | ✅ |
+| 21 | fusione delle entità adiacenti in **valutazione** ↔ merge dell'**app** | `_fuse_adjacent()` allinea l'app a `normalize_entities()`; `test_analyze_policy.py::TestAdjacentSpansAreFused` | ✅ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -85,6 +86,19 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   addestramento) e numeri del run pieno (18.805), senza che la colonna lo dicesse.
   Leggendoli come confrontabili si conclude che una ricetta «non si riproduce», mentre
   semplicemente non era mai stato eseguito lo stesso esperimento.
+
+- **#21** — `normalize_entities()` in valutazione fonde due span adiacenti dello stesso
+  tag (deve: nel gold 'Mario'/'Rossi' sono `GIVENNAME`+`SURNAME` separati). `_merge()`
+  nell'app non lo faceva. Risultato: `FULLNAME` sul test congelato risultava **2446 →
+  2454, un miglioramento**, mentre il prodotto emetteva `[FULLNAME_1] [FULLNAME_2]` —
+  che per un LLM a valle sono due persone diverse. Misurato: il fine-tuning spezza
+  `FULLNAME` nel **9,9%** dei casi contro lo **0,3%** del checkpoint di partenza.
+  Il difetto era invisibile perché la misura e l'app avevano due semantiche diverse
+  per la stessa operazione, e la misura era quella che rispondeva.
+
+  Nota su cosa NON si fonde: gli span **validati**. Un IP o un CF sono completi per
+  costruzione, quindi due accanto sono due entità — fonderli maschererebbe
+  `203.0.113.1 203.0.113.2` con un solo segnaposto.
 
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:
