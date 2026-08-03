@@ -43,15 +43,44 @@ def sha(path):
     return h.hexdigest()
 
 
-def main():
+def verifica_impronta(percorso, percorso_sha):
+    """Confronta un file con l'impronta depositata. Ritorna `(ok, verificabile,
+    dettaglio)`.
+
+    Serve per il test congelato, che si esegue una volta sola e decide se il modello
+    addestrato sostituisce quello in produzione (docs/CRITERIO.md). E' l'unico
+    artefatto che, cambiando in silenzio, invalida la decisione senza lasciare
+    traccia: il criterio resterebbe scritto, i numeri verrebbero da altre righe, e
+    nulla lo direbbe.
+
+    Un file assente non e' un fallimento — sul pod puo' non essere ancora stato
+    scaricato — ma non e' nemmeno un OK: e' *non verificato*, e va detto."""
+    dato, atteso = Path(percorso), Path(percorso_sha)
+    if not dato.is_file():
+        return False, False, f"assente: {percorso}"
+    if not atteso.is_file():
+        return False, False, f"nessuna impronta depositata in {percorso_sha}"
+    calcolata = sha(dato)
+    if calcolata != atteso.read_text().split()[0]:
+        return False, True, f"IMPRONTA DIVERSA — {dato.name} non e' piu' quello congelato"
+    return True, True, f"invariato byte per byte ({dato.name})"
+
+
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--train", required=True)
     ap.add_argument("--eval", required=True)
     ap.add_argument("--rehearsal", default=None)
     ap.add_argument("--manifest", default="dataset/manifesto.json")
+    ap.add_argument("--frozen", default="dataset/validation/test_congelato_legale.jsonl")
+    ap.add_argument("--frozen-sha", default="dataset/validation/test_congelato.sha256")
     ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--base", default="rizzoaiacademy/rizzo-pii-0.3B")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     # --- 1. impronte del corpus -------------------------------------------- #
     file = {"train": args.train, "eval": args.eval}
@@ -71,6 +100,10 @@ def main():
         m.parent.mkdir(parents=True, exist_ok=True)
         m.write_text(json.dumps(impronte, indent=2))
         check("manifesto", True, f"scritto per la prima volta in {m}", verificabile=False)
+
+    # --- 1-bis. il test congelato ------------------------------------------- #
+    ok, verificabile, dettaglio = verifica_impronta(args.frozen, args.frozen_sha)
+    check("test congelato", ok, dettaglio, verificabile=verificabile)
 
     # --- 2. nessuna sovrapposizione fra train ed eval ----------------------- #
     import generate_cyber_pii as cy
@@ -106,13 +139,23 @@ def main():
     try:
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained(args.base)
-        righe = ev.load(args.train)[:500]
-        lunghe = sum(1 for r in righe
-                     if len(tok(r["tokens"], is_split_into_words=True)["input_ids"]) > args.max_len)
-        check(f"esempi entro max_len={args.max_len}", lunghe == 0,
-              f"{lunghe}/500 troncati" if lunghe else "campione di 500")
+        # TUTTE le righe di TUTTI i file, non un campione: un controllo che campiona
+        # non puo' dire "nessun troncamento". Misurato, la riga piu' lunga non era nel
+        # training (1335 token) ma nel set di VALUTAZIONE (1861) — un campione del
+        # solo train avrebbe fatto scegliere un max_len che tronca la misura.
+        peggio, dove, totale = 0, "", 0
+        for etichetta, f in file.items():
+            righe = ev.load(f)
+            totale += len(righe)
+            L = [len(x) for x in tok([r["tokens"] for r in righe],
+                                     is_split_into_words=True)["input_ids"]]
+            if max(L) > peggio:
+                peggio, dove = max(L), etichetta
+        check(f"nessun troncamento a max_len={args.max_len}", peggio <= args.max_len,
+              f"riga piu' lunga: {peggio} token (in '{dove}'), su {totale} righe")
     except ImportError:
-        check("esempi entro max_len", False, "transformers assente", verificabile=False)
+        check(f"nessun troncamento a max_len={args.max_len}", False,
+              "transformers assente", verificabile=False)
 
     # --- 6. ambiente -------------------------------------------------------- #
     versioni = {}
