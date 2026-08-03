@@ -39,10 +39,17 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src" / "training"))
 
 BASE_MODEL = "rizzoaiacademy/rizzo-pii-0.3B"
-MAX_LEN = 512
+MAX_LEN = 2048        # misurato: la riga piu' lunga di tutti i corpora e' 1861
 EPOCHS = 2
-BATCH = 16
+BATCH = 8             # con ACCUM 2 il batch EFFICACE resta 16 (§2.3)
+ACCUM = 2
 LR = 2e-5
+
+# La testa di classificazione di mmBERT non e' il solo `classifier`: fra l'ultimo
+# strato dell'encoder e la proiezione finale c'e' `head` (dense + norm). Agganciare
+# il solo `classifier` lascia addestrabile lo 0,011% dei pesi — e' linear probing,
+# non "addestra la testa".
+HEAD_PREFIXES = ("head.", "classifier.")
 
 
 def bio_of(rec, label2id, tag_map, drop):
@@ -72,6 +79,41 @@ def tags_of(rec, tag_map, drop):
             if tipo not in drop:
                 out.add(tipo)
     return out
+
+
+def head_parameters(nomi):
+    """Divide i nomi dei parametri fra testa di classificazione ed encoder.
+
+    Ritorna `(agganciati, orfani)`: i nomi che restano addestrabili, e i prefissi di
+    HEAD_PREFIXES che non hanno trovato alcun riscontro. Un prefisso orfano e' il
+    modo silenzioso in cui questa leva si guasta — cambia l'architettura di base, il
+    prefisso non aggancia piu' nulla, e la corsa parte lo stesso addestrando un
+    decimo di cio' che dovrebbe. Va visto prima di pagare le ore di GPU (§2.5)."""
+    nomi = list(nomi)     # scorso una volta per prefisso: un generatore si esaurirebbe
+    agganciati, orfani = [], []
+    for prefisso in HEAD_PREFIXES:
+        trovati = [n for n in nomi if n.startswith(prefisso)]
+        if trovati:
+            agganciati.extend(trovati)
+        else:
+            orfani.append(prefisso)
+    return agganciati, orfani
+
+
+def scheda_corsa(args, righe, esempi, ripasso_righe):
+    """Il record di cio' che la corsa ha davvero eseguito, salvato in finetune.json.
+
+    Parte da `vars(args)`, cioe' registra **ogni** leva della riga di comando per
+    costruzione: una leva nuova non puo' essere dimenticata qui, che e' la stessa
+    garanzia di un test ma senza il test. Ai valori dichiarati aggiunge quelli
+    derivati che non si leggono da nessuna singola opzione — primo fra tutti il
+    batch EFFICACE, senza il quale `batch: 8` di due corse con accumulo diverso si
+    legge come la stessa configurazione (§2.3)."""
+    return {**vars(args),
+            "batch_efficace": args.batch * args.accum,
+            "righe": righe,
+            "esempi": esempi,
+            "ripasso_righe": ripasso_righe}
 
 
 def stratified_rehearsal(pool, quante, nuove, tag_map, drop, seed=42):
@@ -133,18 +175,18 @@ def stratified_rehearsal(pool, quante, nuove, tag_map, drop, seed=42):
     return scelti
 
 
-def build_dataset(rows, tokenizer, label2id, tag_map, drop):
+def build_dataset(rows, tokenizer, label2id, tag_map, drop, max_len=MAX_LEN):
     """Tokenizza allineando le etichette ai subword: solo il PRIMO subword di ogni
     parola porta l'etichetta, gli altri sono ignorati (-100). E' la convenzione di
     Hugging Face e quella con cui il modello e' stato addestrato la prima volta."""
     import torch
 
     esempi = []
-    scartate = 0
+    senza_entita = 0
     for rec in rows:
         bio = bio_of(rec, label2id, tag_map, drop)
         enc = tokenizer(rec["tokens"], is_split_into_words=True,
-                        truncation=True, max_length=MAX_LEN)
+                        truncation=True, max_length=max_len)
         etichette, precedente = [], None
         for wid in enc.word_ids():
             if wid is None:
@@ -154,14 +196,20 @@ def build_dataset(rows, tokenizer, label2id, tag_map, drop):
             else:
                 etichette.append(-100)
             precedente = wid
+        # Le righe interamente `O` RESTANO. Una versione precedente le scartava come
+        # "righe che non insegnano nulla": e' falso per questo dataset, dove 8
+        # template su 27 sono deliberatamente privi di PII e insegnano che un
+        # indirizzo IP, un hash e un identificativo cloud sono `O`. Sono il 15,8% del
+        # corpus bilanciato, e sono la meta' del motivo per cui il fine-tuning esiste
+        # — l'altra lacuna misurata sono ~2.700 entita' inventate su stringhe
+        # tecniche. Scartarle addestrava contro l'obiettivo dichiarato.
         if all(e in (-100, label2id["O"]) for e in etichette):
-            scartate += 1          # righe senza alcuna entita': non insegnano nulla
-            continue
+            senza_entita += 1
         esempi.append({"input_ids": enc["input_ids"],
                        "attention_mask": enc["attention_mask"],
                        "labels": etichette})
-    if scartate:
-        print(f"  {scartate} righe senza entita' escluse dal training")
+    if senza_entita:
+        print(f"  {senza_entita} righe interamente 'O' incluse: insegnano il negativo")
 
     class Dataset(torch.utils.data.Dataset):
         def __len__(self):
@@ -173,7 +221,7 @@ def build_dataset(rows, tokenizer, label2id, tag_map, drop):
     return Dataset()
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--train", required=True, help=".jsonl di addestramento")
     ap.add_argument("--rehearsal", default=None,
@@ -191,9 +239,23 @@ def main():
     ap.add_argument("--base", default=BASE_MODEL)
     ap.add_argument("--epochs", type=float, default=EPOCHS)
     ap.add_argument("--batch", type=int, default=BATCH)
+    ap.add_argument("--freeze-encoder", action="store_true",
+                    help="congela l'encoder e addestra la sola testa di "
+                         f"classificazione ({' + '.join(HEAD_PREFIXES)}), ~0,2% dei "
+                         "pesi. E' la leva piu' forte contro la dimenticanza — il "
+                         "modello non puo' scordare cio' che non puo' modificare — "
+                         "al prezzo di imparare meno")
+    ap.add_argument("--accum", type=int, default=ACCUM,
+                    help="accumulo: batch EFFICACE = batch x accum. Tienilo costante "
+                         "quando confronti varianti, altrimenti cambi il numero di "
+                         "passi di ottimizzazione e stai confrontando due esperimenti")
     ap.add_argument("--lr", type=float, default=LR)
     ap.add_argument("--max-len", type=int, default=MAX_LEN)
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     import torch
     from transformers import (AutoModelForTokenClassification, AutoTokenizer,
@@ -206,10 +268,28 @@ def main():
     model = AutoModelForTokenClassification.from_pretrained(args.base)
     label2id = model.config.label2id
     print(f"  {len(label2id)} etichette BIO, num_labels INVARIATO")
+    if args.freeze_encoder:
+        agganciati, orfani = head_parameters(n for n, _ in model.named_parameters())
+        # §2.5: asserire cio' che DEVE essere addestrabile, non solo cio' che non deve.
+        # Un prefisso che non aggancia nulla non ferma la corsa da solo: la lascia
+        # partire, girare per ore e costare, e si scopre alla misura finale.
+        if orfani:
+            sys.exit(f"ERRORE: --freeze-encoder non ha trovato parametri per "
+                     f"{', '.join(orfani)} in {args.base}. L'architettura non e' "
+                     f"quella attesa: la corsa addestrerebbe meno di quanto credi.")
+        agganciati = set(agganciati)
+        for nome, par in model.named_parameters():
+            par.requires_grad = nome in agganciati
+        addestrabili = sum(p_.numel() for n, p_ in model.named_parameters()
+                           if n in agganciati)
+        totali = sum(p_.numel() for p_ in model.parameters())
+        print(f"  encoder congelato: {addestrabili:,}/{totali:,} parametri addestrabili "
+              f"({addestrabili/totali:.3%}) — {', '.join(sorted(agganciati))}")
     print(f"  GPU: {torch.cuda.is_available()}")
 
     rows = load(args.train)
     print(f"{len(rows)} righe da {args.train}")
+    quante = 0
     if args.rehearsal:
         import random
         ripasso = load(args.rehearsal)
@@ -226,7 +306,7 @@ def main():
         print("  ATTENZIONE: nessun ripasso. Il modello DIMENTICHERA' il dominio "
               "originale;\n  misurato: 180 esempi bastano a far scendere il legale "
               "da 0.822 a 0.763.")
-    ds = build_dataset(rows, tokenizer, label2id, TAG_MAP, DROP_TYPES)
+    ds = build_dataset(rows, tokenizer, label2id, TAG_MAP, DROP_TYPES, args.max_len)
     print(f"  {len(ds)} esempi di addestramento")
 
     out = Path(args.out)
@@ -236,6 +316,7 @@ def main():
             output_dir=str(out / "_run"),
             num_train_epochs=args.epochs,
             per_device_train_batch_size=args.batch,
+            gradient_accumulation_steps=args.accum,
             learning_rate=args.lr,
             warmup_ratio=0.1,
             logging_steps=50,
@@ -251,11 +332,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out)
     tokenizer.save_pretrained(out)
-    (out / "finetune.json").write_text(json.dumps({
-        "base": args.base, "train_file": args.train, "rows": len(rows),
-        "examples": len(ds), "epochs": args.epochs, "batch": args.batch,
-        "lr": args.lr, "max_len": args.max_len,
-    }, indent=2), "utf-8")
+    (out / "finetune.json").write_text(
+        json.dumps(scheda_corsa(args, len(rows), len(ds), quante), indent=2), "utf-8")
     print(f"\nsalvato -> {out}")
     print("\nORA IL CONTROLLO CHE NON VA SALTATO:")
     print("  1) rimisura sul genere sicurezza (deve salire)")
