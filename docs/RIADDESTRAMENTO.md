@@ -71,6 +71,30 @@ Lo split e' deciso dall'**impronta** di ogni template, non dalla sua posizione:
 resta stabile anche se la banca cresce. Se un giorno non desse `0`, c'e' leakage e
 qualunque numero successivo e' privo di valore.
 
+## 1-bis. IL PREFLIGHT — gira in secondi, prima di ogni corsa che costa
+
+```bash
+python src/training/preflight.py \
+    --train dataset/synthetic/security_train_bilanciato.jsonl \
+    --eval  dataset/synthetic/synthetic_security_it_plain_eval.jsonl \
+    --rehearsal dataset/subsets/train_subset_10k.jsonl \
+    --max-len 2048
+```
+
+Verifica in un colpo solo le coppie che devono coincidere: impronte dei corpora
+contro `dataset/manifesto.json`, **test congelato invariato byte per byte**,
+scheletri train/eval disgiunti, `TAG_MAP` allineata col training, determinismo
+della normalizzazione, nessun esempio oltre `max_len` — **su tutte le righe di tutti
+i file, non su un campione** — e versioni delle librerie.
+
+Tre esiti, non due: `OK`, `FALLITO` e **`N/V`**. Un controllo che non ha potuto
+verificare nulla — file assente, libreria mancante — dice *non verificato*, non
+*OK*: altrimenti il preflight diventa il difetto che esiste per prevenire.
+
+Sulla macchina di sviluppo l'unico atteso rosso e' `GPU disponibile`. Sul pod deve
+essere verde, e va rilanciato **li'**: e' l'unico modo di confrontare i due ambienti
+(`docs/GEMELLI.md` #11).
+
 ## 2. I DUE numeri di partenza — prima di toccare il modello
 
 Senza questi, dopo non si puo' dire se e' migliorato.
@@ -139,6 +163,15 @@ dove metterli.
 
 Costa cinque minuti su CPU e ha gia' bocciato la ricetta iniziale. Non e' una
 formalita': e' il motivo per cui il pod non va acceso adesso.
+
+> **I numeri di questa sezione sono da rifare (2026-08-03).** Sono stati misurati
+> quando `build_dataset()` scartava le righe interamente `O`: **2.980 righe, il
+> 15,8% del corpus bilanciato**. Ora entrano nel training — sono deliberate, e sono
+> meta' del motivo per cui il fine-tuning esiste (vedi `docs/GEMELLI.md` #13).
+> Il corpus di addestramento e' quindi piu' grande del 15,8% e ha una distribuzione
+> diversa: **le tabelle qui sotto non sono piu' confrontabili con una corsa di
+> oggi**, e la sonda va rieseguita prima di accendere il pod. Restano valide come
+> registro di cio' che la sonda ha gia' saputo bocciare.
 
 ```bash
 head -200  dataset/synthetic/synthetic_security_it_plain_train.jsonl > /tmp/mini_train.jsonl
@@ -241,8 +274,17 @@ E il training funziona anche in avanti, misurato su 400 righe di sicurezza con
 `DATE` da 0.075 a 0.245 con 200 esempi. Non e' ancora il livello dei detector
 (0.948), ma la direzione e' quella giusta e la scala e' 90 volte piu' piccola.
 
-Altre leve non ancora provate, se servissero: `--lr 5e-6`, congelare gli strati
-bassi, `--max-tag-repeat 1`.
+Altre leve non ancora provate, se servissero: `--lr 5e-6`, `--max-tag-repeat 1`, e
+**`--freeze-encoder`**, che congela l'encoder e addestra la sola testa
+(`head.dense`, `head.norm`, `classifier`): **624.428 parametri su 307.564.076, lo
+0,203%**. E' la leva piu' forte contro la dimenticanza — il modello non puo'
+scordare cio' che non puo' modificare — e per la stessa ragione la piu' limitata
+nell'imparare. Va misurata sapendolo, non assunta.
+
+Quando confronti due varianti tieni **costante il batch efficace** (`--batch` x
+`--accum`, oggi 8 x 2 = 16): cambiarlo cambia il numero di passi di ottimizzazione,
+cioe' stai confrontando due esperimenti invece di due ricette. `finetune.json`
+registra entrambi i valori insieme a ogni altra leva.
 
 **Cautela sul campione:** la sonda usa 300 righe (634 entita'). Le differenze di
 cinque punti sono un segnale, non una misura di precisione. Prima di dichiarare

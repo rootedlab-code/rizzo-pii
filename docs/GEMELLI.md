@@ -17,9 +17,14 @@ Una riga per coppia. Una riga senza test è un debito dichiarato, e si vede.
 | 7 | ordine dei `set` fra due processi ↔ risultato della misura | chiave di ordinamento totale + `test_evaluation.py::TestDeterminism` | ✅ |
 | 8 | template dello split `train` ↔ template dello split `eval` | `test_evaluation.py::TestTemplateSplit`, e verifica sugli **scheletri** | ✅ |
 | 9 | intervalli di valori in `train` ↔ in `eval` | `test_evaluation.py::TestValuePools` | ✅ |
-| 10 | etichette del training ↔ `label2id` del modello | `bio_of()` scarta ciò che non esiste in `label2id` — **nessun test** | ⚠️ |
+| 10 | etichette del training ↔ `label2id` del modello | `test_finetune_security.py::TestBioRemapping` | ✅ |
 | 11 | ambiente locale ↔ ambiente del pod | `preflight.py` confronta le versioni — **da eseguire su entrambi** | ⚠️ |
-| 12 | dataset misurato ↔ dataset addestrato | manifesto sha256 in `preflight.py` | ⚠️ |
+| 12 | dataset misurato ↔ dataset addestrato | manifesto sha256 in `preflight.py` — il meccanismo è testato, il confronto del manifesto no | ⚠️ |
+| 13 | ciò che il dataset dichiara di insegnare ↔ ciò su cui il training gira | `test_finetune_security.py::TestAllOhRowsAreKept` | ✅ |
+| 14 | test congelato ↔ la sua impronta depositata | `preflight.py::verifica_impronta` + `test_preflight.py::TestFrozenFingerprint` | ✅ |
+| 15 | leve della riga di comando ↔ `finetune.json` | `scheda_corsa()` parte da `vars(args)`: nessuna leva può mancare **per costruzione**, e `TestRunRecord` lo sorveglia | ✅ |
+| 16 | parametri che `--freeze-encoder` dichiara ↔ quelli che aggancia | `test_finetune_security.py::TestFreezeEncoder` asserisce l'insieme **esatto** | ✅ |
+| 17 | stub di torch di un file di test ↔ stub degli altri file | `_install_stubs()` aumenta il modulo già presente invece di sostituirlo | ✅ |
 
 ## I difetti che queste righe hanno già pagato
 
@@ -38,6 +43,26 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   e la fusione delle entità adiacenti cambiava di conseguenza.
 - **#5** — 2.000 righe predette confrontate con 7.000 di gold. Qui la guardia c'era già
   e ha fermato tutto: è l'unico caso in cui il gemello è stato colto sul fatto.
+- **#13** — `build_dataset()` scartava le righe interamente `O` con il commento «non
+  insegnano nulla». Sono **2.980, il 15,8%** del corpus bilanciato, e sono gli 8
+  template su 27 scritti apposta senza PII per insegnare che un indirizzo IP, un hash
+  e un identificativo cloud sono `O`. Cioè per chiudere la seconda delle due lacune
+  che il fine-tuning esiste per chiudere: le ~2.700 entità inventate su stringhe
+  tecniche. Si stava addestrando contro l'obiettivo dichiarato, e nessun numero lo
+  mostrava perché il training non fallisce, riesce su meno dati.
+- **#16** — `--freeze-encoder` diceva «addestra la testa di classificazione» e
+  agganciava il solo `classifier`: **33.836 parametri su 307 milioni, lo 0,011%**.
+  `head.dense` e `head.norm` — che sono la testa quanto la proiezione finale —
+  restavano congelati. La guardia che c'era coglieva il caso «zero parametri», non
+  quello «un decimo dei parametri», che è quello che sarebbe successo.
+- **#16, seconda volta** — la correzione passava `model.named_parameters()`, cioè un
+  **generatore**, a una funzione che lo scorre una volta per prefisso: `head.` lo
+  esauriva e `classifier.` risultava orfano. I test non lo vedevano perché gli
+  passavano una lista. Il gemello era fra la forma dell'input nel test e quella
+  nell'uso, ed è la ragione per cui ora c'è un test che passa un generatore.
+- **#17** — il primo file di test che registra uno stub di `torch` vince, perché tutti
+  usano `setdefault`. Il mio arrivava dopo, il suo `torch.utils` non veniva mai
+  installato, e tre test fallivano **solo dentro la suite completa** — verdi da soli.
 
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:
