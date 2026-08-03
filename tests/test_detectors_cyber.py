@@ -324,5 +324,32 @@ class TestTime(unittest.TestCase):
                          ["2026-10-14 17:48"])
 
 
+class TestUnknownTld(unittest.TestCase):
+    """Il detector DOMAIN filtra su 119 TLD. Fuori da quella lista non fallisce
+    rumorosamente: NON RILEVA, e il dominio esce in chiaro senza che nulla lo dica.
+    Misurato su un audit vero: il dominio del committente in chiaro 7 volte perche'
+    il suo TLD non e' elencato, mentre gli URL con lo STESSO dominio erano mascherati — il documento
+    sembrava protetto proprio dove non lo era."""
+
+    def test_the_extension_that_caused_the_leak_is_reported(self):
+        avvisi = cyber.unknown_tld_tokens("host azienda.localhost e mx.azienda.localhost")
+        self.assertEqual(avvisi.get("localhost"), 2)
+
+    def test_a_known_tld_is_not_reported(self):
+        self.assertEqual(cyber.unknown_tld_tokens("host example.com e altro.it"), {})
+
+    def test_file_names_do_not_drown_the_signal(self):
+        # senza il filtro delle estensioni, un README rende l'avviso illeggibile
+        testo = "vedi index.html, config.json, note.txt e poi azienda.localhost"
+        self.assertEqual(cyber.unknown_tld_tokens(testo), {"localhost": 1})
+
+    def test_the_count_orders_the_most_frequent_first(self):
+        testo = "a.localhost b.localhost c.localhost d.zzz"
+        self.assertEqual(list(cyber.unknown_tld_tokens(testo))[0], "localhost")
+
+    def test_an_ip_is_not_a_domain_shaped_token(self):
+        self.assertEqual(cyber.unknown_tld_tokens("host 203.0.113.42 raggiunto"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -306,3 +306,73 @@ class TestLoad(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeclaredEntitiesAreDetected(unittest.TestCase):
+    """Un valore dichiarato nel file di scope e' una DICHIARAZIONE, non un'ipotesi da
+    far confermare a una regex. Senza questo, lo scope assegna ruoli solo a cio' che i
+    detector hanno gia' trovato, e un valore dichiarato ma non rilevato esce in chiaro
+    proprio mentre il file dice di proteggerlo.
+
+    Caso reale: il dominio del committente elencato come `own`, in chiaro 7 volte
+    su un audit, perche' il suo TLD non e' fra i 119 del detector DOMAIN."""
+
+    def entita(self, dichiarati, testo):
+        s = scope.Scope(lists=dichiarati)
+        return [(e["label"], testo[e["start"]:e["end"]]) for e in s.declared_entities(testo)]
+
+    def test_a_domain_with_an_unlisted_tld_is_still_detected(self):
+        trovate = self.entita({"own": {"DOMAIN": ["azienda.localhost"]}},
+                              "host azienda.localhost in scope")
+        self.assertEqual(trovate, [("DOMAIN", "azienda.localhost")])
+
+    def test_subdomains_of_a_declared_domain_are_detected(self):
+        # chi dichiara azienda.localhost non deve rielencare mx.azienda.localhost
+        trovate = self.entita({"own": {"DOMAIN": ["azienda.localhost"]}},
+                              "record MX su mx.azienda.localhost rilevato")
+        self.assertEqual(trovate, [("DOMAIN", "mx.azienda.localhost")])
+
+    def test_a_declared_value_is_found_every_time_it_appears(self):
+        trovate = self.entita({"own": {"DOMAIN": ["azienda.localhost"]}},
+                              "azienda.localhost, poi www.azienda.localhost, poi azienda.localhost")
+        self.assertEqual(len(trovate), 3)
+
+    def test_the_match_is_case_insensitive(self):
+        trovate = self.entita({"own": {"DOMAIN": ["azienda.localhost"]}}, "CN=Azienda.LOCALHOST")
+        self.assertEqual(trovate, [("DOMAIN", "Azienda.LOCALHOST")])
+
+    def test_a_longer_neighbour_is_not_matched_by_accident(self):
+        # un indirizzo dichiarato non deve agganciare quello che lo contiene
+        # come prefisso: .13 non e' .130, e prenderlo maschererebbe il vicino
+        trovate = self.entita({"own": {"IP": ["203.0.113.13"]}},
+                              "da 203.0.113.130 verso 1203.0.113.13 nulla")
+        self.assertEqual(trovate, [])
+
+    def test_the_declared_label_is_carried_through(self):
+        trovate = self.entita({"adversary": {"WALLET": ["1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"]}},
+                              "wallet 1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2 osservato")
+        self.assertEqual(trovate[0][0], "WALLET")
+
+    def test_nothing_declared_gives_nothing(self):
+        self.assertEqual(self.entita({}, "testo qualunque con example.com"), [])
+
+
+class TestUnknownScopeLabelIsReported(unittest.TestCase):
+    """`domains` invece di `domain`: le voci stanno nel file e non proteggono niente,
+    perche' nessuna entita' porta quel tag. E' successo davvero."""
+
+    def test_a_plural_label_is_warned_about(self):
+        avvisi = []
+        scope._parse_lists({"own": {"domains": ["example.com"]}}, avvisi.append)
+        self.assertEqual(len(avvisi), 1)
+        self.assertIn("domains", avvisi[0])
+
+    def test_a_known_label_is_silent(self):
+        avvisi = []
+        scope._parse_lists({"own": {"DOMAIN": ["example.com"]}}, avvisi.append)
+        self.assertEqual(avvisi, [])
+
+    def test_the_lowercase_form_of_a_known_label_is_accepted(self):
+        avvisi = []
+        scope._parse_lists({"own": {"ip": ["203.0.113.1"]}}, avvisi.append)
+        self.assertEqual(avvisi, [])

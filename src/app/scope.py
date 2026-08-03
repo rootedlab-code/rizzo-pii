@@ -102,6 +102,15 @@ DEFAULT_CUES = {
 
 # Come confrontare un valore con le liste, per famiglia di tag. Tutto cio' che non
 # e' elencato qui usa il confronto esatto normalizzato.
+# I tag che un file di scope puo' portare. Non e' la tassonomia completa: sono i
+# valori di cui ha senso dichiarare il proprietario in un ingaggio. Un tag fuori da
+# qui non fara' mai match — le sue voci starebbero nel file senza proteggere nulla —
+# quindi viene segnalato al caricamento invece di essere accettato in silenzio.
+KNOWN_SCOPE_LABELS = frozenset({
+    "IP", "DOMAIN", "URL", "EMAIL", "HASH", "WALLET", "MAC", "ASN",
+    "CLOUDID", "USER", "PATH", "FULLNAME", "ORG", "TELEPHONENUM",
+})
+
 _IP_LABELS = frozenset({"IP"})
 _HOST_LABELS = frozenset({"DOMAIN"})
 _URL_LABELS = frozenset({"URL"})
@@ -280,6 +289,35 @@ class Scope:
             return ScopeMatch(role, SOURCE_CONTEXT)
         return _UNRESOLVED
 
+    # -- rilevamento da dichiarazione -------------------------------------- #
+    def declared_entities(self, text):
+        """Entita' dai valori DICHIARATI nel file di scope, cercati come sottostringhe.
+
+        Chi scrive un valore qui dentro sta dicendo «questo e' del mio cliente» o
+        «questo e' dell'avversario». E' una dichiarazione, non un'ipotesi da far
+        confermare a una regex: senza questo metodo lo scope assegna ruoli soltanto
+        a cio' che i detector hanno gia' trovato, e un valore dichiarato ma non
+        rilevato esce in chiaro proprio mentre il file dice di proteggerlo.
+
+        Misurato su un audit reale: il dominio del committente era elencato come
+        `own` ed e' uscito in chiaro **7 volte**, perche' il suo TLD non e' fra i
+        119 della lista del detector `DOMAIN`. La lista dei TLD non potra' mai essere completa — i
+        gTLD sono oltre millecinquecento — ma la dichiarazione dell'analista si'.
+
+        Per i domini valgono anche i sottodomini: chi dichiara `example.com` non deve
+        rielencare `mx.example.com`."""
+        fuori = []
+        for role in ROLES:
+            for label, entries in self.lists[role].items():
+                sotto = r"(?:[A-Za-z0-9_-]+\.)*" if label in _HOST_LABELS else ""
+                for entry in entries:
+                    rx = re.compile(rf"(?<![\w.\-]){sotto}{re.escape(entry)}(?![\w\-])",
+                                    re.IGNORECASE)
+                    for m in rx.finditer(text):
+                        fuori.append({"label": label, "start": m.start(), "end": m.end(),
+                                      "score": 1.0, "validated": True, "source": "scope"})
+        return fuori
+
     # -- introspezione (mai i valori) -------------------------------------- #
     def is_empty(self):
         return not any(self.lists[role] for role in ROLES)
@@ -327,6 +365,13 @@ def _parse_lists(data, warn):
         for label, entries in by_label.items():
             if isinstance(entries, str) or not isinstance(entries, (list, tuple)):
                 raise ScopeError(f"'{role}.{label}' deve essere una lista di stringhe")
+            if str(label).upper() not in KNOWN_SCOPE_LABELS:
+                # Un tag che nessuna entita' porta non fa MAI match: le sue voci
+                # esistono nel file e non proteggono niente. E' successo davvero, con
+                # `domains` al posto di `domain`, su un audit reale.
+                warn(f"'{role}.{label}': tag sconosciuto, quelle voci non "
+                     f"proteggeranno nulla. Attesi: "
+                     f"{', '.join(sorted(KNOWN_SCOPE_LABELS))}")
             values = [str(e).strip() for e in entries if str(e).strip()]
             if values:
                 clean[label] = values

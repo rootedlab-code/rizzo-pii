@@ -38,6 +38,7 @@ Ogni voce di DETECTORS ha la stessa forma del core in app.py:
     (label, regex compilata, validatore o None, strict)
 """
 
+import collections
 import hashlib
 import ipaddress
 import re
@@ -316,6 +317,41 @@ DETECTORS = DATE_DETECTORS + TIME_DETECTORS + [
 # Keeplist: riferimenti PUBBLICI che nessun detector deve mascherare.
 # Volutamente ristretta ai prefissi inequivocabili (vedi il docstring in testa).
 # --------------------------------------------------------------------------- #
+# Estensioni che NON sono domini, e che senza questo filtro renderebbero l'avviso
+# illeggibile: un README e' pieno di `index.html` e `config.json`. Non e' una lista di
+# TLD al contrario — e' l'elenco delle cose che sappiamo per certo non esserlo.
+EXT_NON_TLD = frozenset("""
+html htm txt md json xml yml yaml csv log conf ini cfg toml sql sh bash zsh py js ts
+css scss png jpg jpeg gif svg webp ico pdf zip tar gz bz2 xz rar exe dll so dylib
+jar war class php rb go rs c cpp h hpp java kt swift lock env example sample bak old
+tmp swp pid sock key pem crt cer csr p12 pfx db sqlite dump min map ipynb
+""".split())
+
+_TOKEN_PUNTATO = re.compile(
+    rf"(?<![\w.\-]){_LABEL}(?:\.{_LABEL})*\.([A-Za-z]{{2,24}})(?![\w\-])")
+
+
+def unknown_tld_tokens(text):
+    """Estensioni a forma di TLD che la lista NON riconosce: {estensione: conteggio}.
+
+    Il detector DOMAIN filtra su 119 TLD. Fuori da quella lista non fallisce
+    rumorosamente: **non rileva affatto**, e il dominio esce in chiaro senza che nulla
+    lo dica. Misurato su un audit reale: il dominio del committente in chiaro 7
+    volte perche' il suo TLD non e' elencato, mentre gli URL che contenevano lo
+    STESSO dominio erano mascherati — cioe' il documento sembrava protetto proprio dove non lo era.
+
+    La lista dei TLD non puo' essere completa (i gTLD sono oltre millecinquecento), e
+    allungarla e' una rincorsa. Questa funzione non prova a indovinare: dice
+    all'analista *dove non sa*, e lascia a lui il giudizio. Un `art: 8` in cima
+    all'elenco si riconosce a colpo d'occhio; un `html: 2` si ignora."""
+    fuori = collections.Counter()
+    for m in _TOKEN_PUNTATO.finditer(text):
+        ext = m.group(1).lower()
+        if ext not in TLDS and ext not in EXT_NON_TLD:
+            fuori[ext] += 1
+    return dict(fuori.most_common())
+
+
 KEEP_PATTERNS = [
     re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE),
     re.compile(r"\bCWE-\d{1,4}\b", re.IGNORECASE),

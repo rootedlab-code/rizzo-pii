@@ -381,7 +381,11 @@ def _norm(s):
 
 def analyze(text):
     model_ents, n_chunks = detect_model(text)
-    cands = model_ents + detect_regex(text)
+    # I valori DICHIARATI nel file di scope entrano fra i candidati come gli altri:
+    # sono una dichiarazione dell'analista, non un'ipotesi che una regex deve
+    # confermare. Senza, un dominio elencato come `own` ma con un TLD fuori dalla
+    # lista dei 119 esce in chiaro mentre il file dice di proteggerlo.
+    cands = model_ents + detect_regex(text) + SCOPE.declared_entities(text)
     cands = drop_protected(cands, text)      # keeplist: i riferimenti pubblici restano
     kept = _merge(cands, text)
 
@@ -459,6 +463,11 @@ def analyze(text):
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "by_role": by_role,
+        # Dove il detector DOMAIN NON sa: token a forma di dominio con un'estensione
+        # fuori dalla lista dei TLD. Non sono rilevamenti mancati per certo — puo'
+        # esserci del rumore — ma sono l'unico posto in cui quel detector puo'
+        # fallire in silenzio, e ora lo dice invece di tacere.
+        "tld_sconosciuti": detectors_cyber.unknown_tld_tokens(text),
     }
 
 
