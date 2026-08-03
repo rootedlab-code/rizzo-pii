@@ -27,6 +27,7 @@ la direzione si legge nei due conteggi delle discordanze, che vengono stampati.
 """
 
 import argparse
+import collections
 import math
 import sys
 from pathlib import Path
@@ -84,6 +85,28 @@ def confronta(esiti_a, esiti_b):
             solo_a, solo_b, mcnemar_exact(solo_a, solo_b))
 
 
+def per_tag(esiti_a, esiti_b, soglia):
+    """Applica la regola B a ogni tag: `[(tag, gold, rec_a, rec_b, solo_a, solo_b, p,
+    decide)]`, ordinato per gold decrescente.
+
+    `decide` e' False sotto la soglia di entita': quei tag si riportano ma non
+    bocciano, perche' l'intervallo e' troppo largo perche' il test possa dire
+    qualcosa. Farlo qui e non a mano e' il punto: la regola parla di *ogni* tag sopra
+    la soglia, e una verifica che richiede sedici invocazioni separate e' una
+    verifica che prima o poi si fa solo sui tre tag che si sospettano gia'."""
+    tag_di = collections.defaultdict(lambda: ([], []))
+    for (lab, x), (_, y) in zip(esiti_a, esiti_b):
+        tag_di[lab][0].append(x)
+        tag_di[lab][1].append(y)
+    righe = []
+    for lab, (a, b) in tag_di.items():
+        solo_a = sum(1 for x, y in zip(a, b) if x and not y)
+        solo_b = sum(1 for x, y in zip(a, b) if y and not x)
+        righe.append((lab, len(a), sum(a), sum(b), solo_a, solo_b,
+                      mcnemar_exact(solo_a, solo_b), len(a) >= soglia))
+    return sorted(righe, key=lambda r: -r[1])
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("gold", help="file .jsonl con le entita' vere")
@@ -99,7 +122,39 @@ def build_parser():
     ap.add_argument("--no-normalize", action="store_true",
                     help="non applicare TAG_MAP: senza, i tag fusi segnano recall 0")
     ap.add_argument("--alpha", type=float, default=0.05)
+    ap.add_argument("--per-tag", type=int, nargs="?", const=100, default=None,
+                    metavar="N",
+                    help="applica la regola B a OGNI tag: test appaiato tag per tag, "
+                         "e bocciatura solo per quelli con almeno N entita' nel gold "
+                         "(default 100). Senza, si finisce per controllare i tre tag "
+                         "che si sospettano gia'")
     return ap
+
+
+def stampa_per_tag(righe, soglia, alpha):
+    """Tabella della regola B. Ritorna i tag che la violano."""
+    print(f"\n  {'tag':<18}{'gold':>6}{'A':>7}{'B':>7}{'perse':>7}{'vinte':>7}"
+          f"{'p':>10}  esito")
+    peggiorati = []
+    for lab, gold, rec_a, rec_b, solo_a, solo_b, p, decide in righe:
+        distinguibile = p < alpha and solo_a > solo_b
+        if not decide:
+            esito = f"non decide (<{soglia})"
+        elif distinguibile:
+            esito = "PEGGIORA"
+            peggiorati.append(lab)
+        elif p < alpha:
+            esito = "migliora"
+        else:
+            esito = "invariato"
+        print(f"  {lab:<18}{gold:>6}{rec_a:>7}{rec_b:>7}{solo_a:>7}{solo_b:>7}"
+              f"{p:>10.4f}  {esito}")
+    if peggiorati:
+        print(f"\n  REGOLA B VIOLATA da: {', '.join(peggiorati)}")
+    else:
+        print(f"\n  Regola B soddisfatta: nessun tag con almeno {soglia} entita' "
+              f"peggiora in modo distinguibile.")
+    return peggiorati
 
 
 def main():
@@ -120,6 +175,11 @@ def main():
         a, b = leggi(args.a), leggi(args.b)
     except ValueError as errore:
         sys.exit(f"ERRORE: {errore}")
+
+    if args.per_tag is not None:
+        peggiorati = stampa_per_tag(per_tag(a, b, args.per_tag), args.per_tag,
+                                    args.alpha)
+        sys.exit(1 if peggiorati else 0)
 
     rec_a, rec_b, solo_a, solo_b, p = confronta(a, b)
     print(f"\n{len(a)} entita' del gold, {len(gold)} righe, "

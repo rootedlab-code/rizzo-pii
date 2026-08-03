@@ -101,6 +101,58 @@ class TestPairedComparison(unittest.TestCase):
             mc.confronta(a, b)
 
 
+class TestRuleBSweep(unittest.TestCase):
+    """La regola B parla di OGNI tag sopra la soglia. Verificarla a mano, un tag per
+    invocazione, significa in pratica verificare i tre che si sospettano gia'."""
+
+    def esiti(self, spec):
+        """spec: {tag: [(trovata_da_A, trovata_da_B), ...]}"""
+        a, b = [], []
+        for tag, coppie in spec.items():
+            for x, y in coppie:
+                a.append((tag, x))
+                b.append((tag, y))
+        return a, b
+
+    def test_a_tag_that_only_loses_is_flagged(self):
+        spec = {"ID_DOC": [(True, False)] * 12 + [(False, True)] * 2 +
+                          [(True, True)] * 196}
+        righe = mc.per_tag(*self.esiti(spec), 100)
+        (lab, gold, _ra, _rb, solo_a, solo_b, p, decide), = righe
+        self.assertEqual((lab, gold, solo_a, solo_b, decide),
+                         ("ID_DOC", 210, 12, 2, True))
+        self.assertLess(p, 0.05)
+
+    def test_a_small_tag_is_reported_but_does_not_decide(self):
+        spec = {"ZIPCODE": [(True, False)] * 9 + [(False, True)] * 4 +
+                           [(True, True)] * 74}
+        (_lab, gold, _ra, _rb, _sa, _sb, _p, decide), = mc.per_tag(*self.esiti(spec), 100)
+        self.assertEqual(gold, 87)
+        self.assertFalse(decide)
+
+    def test_every_tag_appears_not_only_the_suspected_ones(self):
+        spec = {f"TAG{i}": [(True, True)] * (100 + i) for i in range(16)}
+        righe = mc.per_tag(*self.esiti(spec), 100)
+        self.assertEqual(len(righe), 16)
+
+    def test_rows_are_ordered_by_gold_count(self):
+        spec = {"PICCOLO": [(True, True)] * 5, "GRANDE": [(True, True)] * 500,
+                "MEDIO": [(True, True)] * 50}
+        conteggi = [r[1] for r in mc.per_tag(*self.esiti(spec), 100)]
+        self.assertEqual(conteggi, sorted(conteggi, reverse=True))
+
+    def test_a_tag_that_only_gains_is_not_a_violation(self):
+        spec = {"CATASTO": [(False, True)] * 78 + [(True, True)] * 267}
+        peggiorati = mc.stampa_per_tag(mc.per_tag(*self.esiti(spec), 100), 100, 0.05)
+        self.assertEqual(peggiorati, [])
+
+    def test_the_verdict_lists_only_the_violating_tags(self):
+        spec = {"BUONO": [(False, True)] * 50 + [(True, True)] * 150,
+                "CATTIVO": [(True, False)] * 20 + [(True, True)] * 180}
+        peggiorati = mc.stampa_per_tag(mc.per_tag(*self.esiti(spec), 100), 100, 0.05)
+        self.assertEqual(peggiorati, ["CATTIVO"])
+
+
 class TestParser(unittest.TestCase):
 
     def test_the_core_regex_net_is_the_default_not_the_cyber_pack(self):
