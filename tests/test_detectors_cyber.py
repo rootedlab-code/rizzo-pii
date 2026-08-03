@@ -351,5 +351,48 @@ class TestUnknownTld(unittest.TestCase):
         self.assertEqual(cyber.unknown_tld_tokens("host 203.0.113.42 raggiunto"), {})
 
 
+class TestZipcode(unittest.TestCase):
+    """ZIPCODE era il 46% degli errori residui del SISTEMA sul genere sicurezza (154
+    su 333) e il tag peggiore in assoluto: il modello ne perdeva il 75%, contro il 3%
+    di CITY e lo 0% di STREET, che gli stanno accanto nella stessa riga d'indirizzo.
+
+    Come TIME, un valore strutturato lasciato al solo modello. Cinque cifre da sole
+    sono pero' anche una porta o un conteggio di byte: serve il contesto, e l'entita'
+    resta il solo CAP."""
+
+    def test_the_canonical_italian_address_form(self):
+        self.assertEqual(find("ZIPCODE", "sede in 57129 Vicenza (VI) attiva"), ["57129"])
+
+    def test_after_the_comma_of_an_address_block(self):
+        self.assertEqual(find("ZIPCODE", "Via Pirandello 188, 20121 Milano"), ["20121"])
+
+    def test_the_explicit_label(self):
+        self.assertEqual(find("ZIPCODE", "CAP 00184 indicato"), ["00184"])
+        self.assertEqual(find("ZIPCODE", "CAP: 20121 nel modulo"), ["20121"])
+
+    def test_the_separator_stays_outside_the_entity(self):
+        # l'entita' e' il CAP, non "CAP: 20121": un lookbehind, non un match piu' lungo
+        self.assertEqual(find("ZIPCODE", "CAP: 20121"), ["20121"])
+
+    def test_the_lowest_and_highest_real_caps_are_accepted(self):
+        self.assertEqual(find("ZIPCODE", "in 00010 Roma (RM)"), ["00010"])
+        self.assertEqual(find("ZIPCODE", "in 98168 Messina (ME)"), ["98168"])
+
+    def test_five_digits_out_of_range_are_refused(self):
+        self.assertEqual(find("ZIPCODE", "in 99999 Altrove (ZZ)"), [])
+        self.assertEqual(find("ZIPCODE", "in 00009 Altrove (ZZ)"), [])
+
+    def test_technical_numbers_are_not_postal_codes(self):
+        # il motivo per cui il contesto e' obbligatorio: in un documento di sicurezza
+        # cinque cifre sono quasi sempre altro
+        for benign in ("porta 10000 aperta", "content-length: 25784 byte",
+                       "build 99999 Interna", "timeout 31536 secondi",
+                       "max-age 31536000 dichiarato"):
+            self.assertEqual(find("ZIPCODE", benign), [], benign)
+
+    def test_a_longer_number_is_not_truncated_to_five_digits(self):
+        self.assertEqual(find("ZIPCODE", "seriale 201217 Milano"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

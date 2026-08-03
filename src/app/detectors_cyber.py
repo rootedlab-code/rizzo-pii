@@ -237,7 +237,53 @@ TIME_DETECTORS = [
 ]
 
 
-DETECTORS = DATE_DETECTORS + TIME_DETECTORS + [
+# ZIPCODE era il 46% degli errori residui del SISTEMA sul genere sicurezza — 154 su
+# 333 — e il tag peggiore in assoluto: il modello ne perde il 75%, contro il 3% di
+# CITY e lo 0% di STREET, che gli stanno accanto nella stessa riga d'indirizzo. Come
+# TIME, e' un valore strutturato lasciato al solo modello.
+#
+# Un CAP italiano e' cinque cifre in un intervallo noto, ma cinque cifre da sole sono
+# anche una porta, un conteggio di byte, un numero di build. Serve il CONTESTO, e i
+# tre modi in cui compare sono inequivocabili. L'entita' pero' e' il solo CAP, non
+# l'indirizzo: il contesto sta quindi nel lookahead, fuori dal match.
+#
+# Le proporzioni del corpus (98% con la provincia fra parentesi) NON sono quelle
+# dell'italiano: sono una proprieta' del generatore. Coprire solo quella forma
+# significherebbe adattarsi allo stampo invece che alla lingua.
+_CITTA = r"[A-ZÀ-Ù][A-Za-zà-ù'\-]+(?:\s+[A-ZÀ-Ù][A-Za-zà-ù'\-]+)*"
+
+
+def cap_ok(value):
+    """Vera se e' un CAP italiano esistente: 00010-98168.
+
+    Le cinque cifre da sole non bastano — `00000` e `99999` hanno la stessa forma —
+    ed e' lo stesso motivo per cui `time_ok` sta accanto alla regex degli orari."""
+    return 10 <= int(value) <= 98168
+
+
+ZIPCODE_DETECTORS = [
+    # 57129 Vicenza (VI) — la forma canonica dell'indirizzo italiano
+    ("ZIPCODE",
+     re.compile(rf"(?<!\d)\d{{5}}(?=\s+{_CITTA}\s*\([A-Z]{{2}}\))"),
+     cap_ok, True),
+
+    # CAP 20121 / CAP: 20121 — l'etichetta esplicita. Piu' lookbehind a larghezza
+    # fissa in alternativa, perche' `re` non ne accetta uno di lunghezza variabile:
+    # il separatore deve restare FUORI dall'entita', che e' il solo numero.
+    ("ZIPCODE",
+     re.compile(r"(?i)(?:(?<=cap\s)|(?<=cap:\s)|(?<=cap:))\d{5}(?!\d)"),
+     cap_ok, True),
+
+    # Via Pirandello 188, 20121 Milano — dopo la virgola del blocco indirizzo, dove
+    # il numero civico ha gia' chiuso la via. Senza la virgola cinque cifre seguite
+    # da una maiuscola sono troppo ambigue in un documento tecnico.
+    ("ZIPCODE",
+     re.compile(rf"(?<=,\s)\d{{5}}(?=\s+{_CITTA})"),
+     cap_ok, True),
+]
+
+
+DETECTORS = DATE_DETECTORS + TIME_DETECTORS + ZIPCODE_DETECTORS + [
     # URL prima del dominio: e' lo span piu' lungo e validato, quindi vince il merge.
     ("URL",
      re.compile(rf"(?<![\w@])(?:h[xt]{{2}}ps?|ftps?|wss?){COLON}//{TAIL}"),
