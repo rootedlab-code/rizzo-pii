@@ -15,6 +15,7 @@ Uso:
 
 import argparse
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -35,27 +36,21 @@ _ap.add_argument("--profile", default=None,
                  help=f"profilo di anonimizzazione: {', '.join(sorted(policy.PROFILES))}")
 args = _ap.parse_args()
 
-# Modello: ULTIMA versione models/rizzo-pii-0.3B-v* (storico versioni); fallback al vecchio
-# models/rizzo-pii-0.3B non versionato, poi al legacy. Override puntuale: env PII_MODEL_DIR.
+# Modello: stessa MECCANICA dell'app (server_config.resolve_model_dir), politica diversa
+# e voluta. L'app fissa APP_MODEL_VERSION perche' il prodotto spedito dev'essere
+# riproducibile; questa CLI prende l'ULTIMA versione perche' serve a provare cio' che si
+# e' appena addestrato. A divergere era la meccanica — questa copia non validava
+# l'override e ordinava le versioni con una chiave diversa — ed e' quella che ora e'
+# condivisa. Override puntuale: env PII_MODEL_DIR.
+import server_config  # noqa: E402
+
 _ROOT = Path(__file__).resolve().parents[2]
 
-
-def resolve_model_dir(models_dir):
-    import os
-    import re
-    if os.environ.get("PII_MODEL_DIR"):
-        return os.environ["PII_MODEL_DIR"]
-    versioned = [p for p in models_dir.glob("rizzo-pii-0.3B-v*") if p.is_dir()]
-    if versioned:
-        def _key(p):
-            m = re.search(r"-v([0-9][0-9.]*)$", p.name)
-            return tuple(int(x) for x in m.group(1).split(".")) if m else ()
-        return str(max(versioned, key=_key))
-    base = models_dir / "rizzo-pii-0.3B"
-    return str(base if base.exists() else models_dir / "pii_model_legacy")
-
-
-MODEL_DIR = resolve_model_dir(_ROOT / "models")
+MODEL_DIR = server_config.resolve_model_dir(
+    override=os.environ.get("PII_MODEL_DIR"),
+    models_root=_ROOT / "models",
+    pinned_version=None,
+)
 
 # pipeline di token-classification; aggregation_strategy raggruppa i subword
 # in entita' intere (unisce B-/I-). device=0 -> GPU, -1 -> CPU.

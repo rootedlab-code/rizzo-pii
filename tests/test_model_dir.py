@@ -125,5 +125,25 @@ class TestAlberoDiSviluppo(ModelDirTestCase):
                          str(self.models / "pii_model_legacy"))
 
 
+class TestIlGemelloConLaCLI(unittest.TestCase):
+    """src/training/test_pii.py risolveva il modello per conto suo, con regole diverse.
+
+    Non validava l'override e ordinava le versioni con una chiave sua. Le due politiche
+    restano legittimamente diverse — l'app fissa una versione perche' il prodotto
+    spedito dev'essere riproducibile, la CLI prende l'ultima perche' serve a provare
+    cio' che si e' appena addestrato — ma la MECCANICA dev'essere una sola. Questo test
+    guarda il sorgente perche' importare quel file esegue argparse e carica il modello.
+    """
+
+    def setUp(self):
+        self.sorgente = (ROOT / "src" / "training" / "test_pii.py").read_text("utf-8")
+
+    def test_the_cli_delegates_to_the_shared_resolver(self):
+        self.assertIn("server_config.resolve_model_dir(", self.sorgente)
+
+    def test_the_cli_does_not_define_a_resolver_of_its_own(self):
+        self.assertNotIn("def resolve_model_dir", self.sorgente)
+
+
 if __name__ == "__main__":
     unittest.main()
