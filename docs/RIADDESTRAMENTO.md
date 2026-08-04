@@ -107,7 +107,20 @@ pip install transformers accelerate
 git clone <questo repo> && cd rizzo-pii
 ```
 
-I dataset non stanno nel repo (`dataset/` e' gitignorata): si rigenerano.
+I dataset non stanno nel repo (`dataset/` e' gitignorata). Due strade, e la prima
+e' piu' veloce:
+
+```bash
+# 1) scaricarli gia' fatti, con le impronte che il preflight si aspetta
+hf download dr3x1/rizzo-pii-security-it --repo-type dataset \
+    --local-dir dataset/synthetic
+
+# 2) oppure rigenerarli (§1): stessa ricetta, stessi sha256
+```
+
+Il ripasso (`dataset/subsets/train_subset_10k.jsonl`) **non** e' pubblicato con
+loro: deriva da Ai4Privacy e DeepMount, che hanno licenze proprie, e va costruito
+dalle fonti originali con `build_subset.py`.
 
 ## 1. Dati, con lo split che evita il leakage
 
