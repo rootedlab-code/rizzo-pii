@@ -165,6 +165,30 @@ class TestAnalyze(PackPolicyTestCase):
         self.assertNotIn(SERVER_IP, out["mapping"].values())   # niente da ripristinare
         self.assertEqual(out["n_kept"], 1)
 
+    def test_the_result_says_which_packs_produced_it(self):
+        # senza, due esecuzioni identiche nell'aspetto possono venire da due
+        # configurazioni diverse, e chi riporta un risultato non sa su cosa l'ha avuto
+        app.enable_packs(["cyber"])
+        self.assertEqual(app.analyze(TEXT)["packs"], ["cyber"])
+
+        app.enable_packs([])
+        self.assertEqual(app.analyze(TEXT)["packs"], [])
+
+    def test_the_reported_policy_is_the_one_the_segments_obey(self):
+        # la policy si cambia a caldo da /policy mentre un'analisi e' in corso: senza
+        # la fotografia presa in cima, meta' documento seguirebbe una regola e meta'
+        # un'altra, e il campo 'policy' non descriverebbe nessuna delle due
+        app.enable_packs(["cyber"])
+        app.POLICY = policy.Policy(keep_tags=("IP",))
+
+        out = app.analyze(TEXT)
+
+        tenuti = set(out["policy"]["keep_tags"])
+        for seg in self.entity_segments(out):
+            atteso = policy.ACTION_KEEP if seg["label"] in tenuti else policy.ACTION_MASK
+            with self.subTest(label=seg["label"]):
+                self.assertEqual(seg["action"], atteso)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -247,16 +247,20 @@ def enable_packs(names):
 enable_packs(parse_packs(os.environ.get("PII_DETECTORS")))
 
 
-def drop_protected(cands, text):
+def drop_protected(cands, text, keeps=None):
     """Scarta le entita' che toccano un riferimento pubblico della keeplist.
 
     Vale anche per le entita' del MODELLO: mascherare 'CVE-2024-3094' o 'T1059.001'
     renderebbe la frase incomprensibile all'LLM a cui la si manda, senza proteggere
-    nessuno (sono identificatori pubblici, non dati di una persona)."""
-    if not ACTIVE_KEEP:
+    nessuno (sono identificatori pubblici, non dati di una persona).
+
+    `keeps` arriva dalla fotografia presa in cima ad analyze(): prima la globale era
+    letta due volte nella stessa funzione, e fra le due letture poteva cambiare."""
+    keeps = ACTIVE_KEEP if keeps is None else keeps
+    if not keeps:
         return cands
     protected = []
-    for rx in ACTIVE_KEEP:
+    for rx in keeps:
         protected.extend((m.start(), m.end()) for m in rx.finditer(text))
     if not protected:
         return cands
@@ -420,13 +424,23 @@ def _norm(s):
 
 
 def analyze(text):
+    # Fotografia della configurazione, presa UNA volta per richiesta.
+    #
+    # Policy e pacchetti si cambiano a caldo da /policy e /detectors, e Flask serve le
+    # richieste in thread: rileggere le globali qua e la' dentro l'analisi significa
+    # che un documento lungo puo' essere anonimizzato per meta' con una policy e per
+    # meta' con un'altra, e che il campo "policy" della risposta non descrive nessuna
+    # delle due. Con lo scatto iniziale il peggio che puo' capitare e' che una
+    # richiesta iniziata prima del cambio finisca **interamente** con la configurazione
+    # vecchia, che e' il comportamento corretto.
+    pol, keeps, ambito = POLICY, ACTIVE_KEEP, SCOPE
     model_ents, n_chunks = detect_model(text)
     # I valori DICHIARATI nel file di scope entrano fra i candidati come gli altri:
     # sono una dichiarazione dell'analista, non un'ipotesi che una regex deve
     # confermare. Senza, un dominio elencato come `own` ma con un TLD fuori dalla
     # lista dei 119 esce in chiaro mentre il file dice di proteggerlo.
-    cands = model_ents + detect_regex(text) + SCOPE.declared_entities(text)
-    cands = drop_protected(cands, text)      # keeplist: i riferimenti pubblici restano
+    cands = model_ents + detect_regex(text) + ambito.declared_entities(text)
+    cands = drop_protected(cands, text, keeps)   # keeplist: i riferimenti pubblici restano
     kept = _merge(cands, text)
 
     # ID reversibili: stesso (label, valore-normalizzato) -> stesso placeholder.
@@ -437,9 +451,9 @@ def analyze(text):
         val = text[e["start"]:e["end"]]
         # Chi e' il proprietario del valore -> cosa farne. Il ruolo si calcola sul testo
         # completo con gli offset dell'entita': il contesto sta nella frase, non nel valore.
-        match = SCOPE.role_of(e["label"], val, text, e["start"], e["end"])
+        match = ambito.role_of(e["label"], val, text, e["start"], e["end"])
         e["role"], e["role_source"] = match.role, match.source
-        decision = POLICY.decide(e["label"], match.role)
+        decision = pol.decide(e["label"], match.role)
         e["action"] = decision.action
         if e["action"] == policy.ACTION_KEEP:
             e["preservation_reason"] = decision.reason
@@ -496,10 +510,13 @@ def analyze(text):
         "n_entities": len(kept),
         "n_kept": n_kept,
         "n_unique": len(mapping),
-        "policy": POLICY.as_dict(),
+        # la policy DAVVERO applicata, non quella attiva adesso: fra l'inizio e la fine
+        # dell'analisi qualcuno puo' averla cambiata da /policy.
+        "policy": pol.as_dict(),
+        "packs": list(ACTIVE_PACKS),
         # conteggi, mai i valori: il file di scope contiene gli indirizzi del cliente
         # e gli indicatori dell'avversario e non deve uscire nemmeno da qui.
-        "scope": SCOPE.as_dict(),
+        "scope": ambito.as_dict(),
         "by_label": dict(sorted(by_label.items(), key=lambda x: -x[1])),
         "by_source": by_source,
         "by_role": by_role,
