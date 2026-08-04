@@ -141,6 +141,16 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   dal commit che ne chiudeva un altro. Se ne è accorto un test che passava da solo e falliva nella
   suite.
 
+- **#26** — **il puntatore all'ingaggio attraversa due linguaggi.** Lo scrive Rust
+  (`save_engagement_file`, l'unico punto del programma che tocca quel file) e lo legge
+  Python (`server_config.saved_scope_file`). Devono concordare su un nome di file
+  (`engagement.json`), su una chiave JSON (`scope_file`) e su due codici d'uscita (76 e
+  78). Nessun compilatore vede entrambi i lati: se qualcuno rinomina da una parte sola
+  non fallisce niente — l'app semplicemente non trova più l'ingaggio, lo scope torna
+  vuoto, **tutto viene mascherato e nessuno se ne accorge** finché non serve il
+  contrario. Sorvegliato da `tests/test_engagement_pointer.py`, che legge il sorgente
+  Rust.
+
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:
 `predict_entities` restituiva `' Stefano Fabbri'` invece di `'Stefano Fabbri'`. Un

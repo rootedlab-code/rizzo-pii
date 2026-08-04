@@ -1,6 +1,13 @@
 # Piano — rendere usabili dall'app desktop le capacità di sicurezza
 
-**Stato: APPROVATO. Fasi 0-3 FATTE il 2026-08-04.** Resta la fase 4 (richiede Rust).
+**Stato: APPROVATO. Fasi 0-4 FATTE il 2026-08-04.**
+
+**Limite di verifica, dichiarato:** il codice Rust compila (`cargo build` pulito, zero
+avvisi, con un baseline verificato prima delle modifiche e un errore deliberato per
+provare che il compilatore stesse davvero guardando il file), ma **la GUI non è stata
+eseguita**: non ho lanciato il bundle, quindi che la voce di menu compaia, che il
+dialogo si apra e che il riavvio si veda a schermo restano da provare a mano su almeno
+una delle tre piattaforme.
 Redatto il 2026-08-04 da tre analisi indipendenti in contesto separato, con le
 affermazioni decisive **riverificate a mano** (§8).
 
@@ -10,7 +17,7 @@ affermazioni decisive **riverificate a mano** (§8).
 | 1 — il modello giusto nel pacchetto | ✅ fatta | `da0a098` |
 | 2 — detector accendibili, profilo onesto | ✅ fatta | `0efb285`, `3ab9c4c`, `ed613d9`, `00b7aac`, `8f26cbe`, `8d7307e` |
 | 3 — cablaggio della configurazione | ✅ fatta | `4d54c49`, `4b1c79b` |
-| 4 — scope dall'app (richiede Rust) | da fare | — |
+| 4 — scope dall'app (richiede Rust) | ✅ fatta | `69db389`, + il commit Rust |
 
 Difetti chiusi: **D1** (`PII_MODEL_DIR` codice morto), **D2** (build rotto), **D3** (`security-report` placebo), **D4** (`load_config` senza guardia), **D5** (`enable_packs` silenzioso), **D6** (uscita generica su scope rotto) e **D7** (docstring che promettono CLI inesistenti).
 Difetto trovato durante il lavoro e **non** risolto: **D9** — la suite ha una

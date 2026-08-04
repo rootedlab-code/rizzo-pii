@@ -17,7 +17,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::json;
+use tauri::menu::{Menu, MenuItem, Submenu};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
 /// Logging diagnostico su file (~/rizzo-pii/tauri.log).
 /// Usa un file nella stessa directory del backend.log.
@@ -94,6 +96,31 @@ fn save_config_file(host: &str, port: u16) {
     let _ = fs::write(path, serde_json::to_string_pretty(&content).unwrap());
 }
 
+/// Scrive il puntatore all'ingaggio (engagement.json), o lo rimuove se `path` e' None.
+///
+/// **Questo e' l'UNICO punto del programma che scrive quel file**, e sta qui e non nel
+/// backend Python di proposito: il percorso deve entrare da un dialogo nativo, non da
+/// una form web. `GET /scope` non ha un POST perche' il file elenca gli indirizzi del
+/// cliente e gli indicatori dell'avversario; un endpoint che accettasse un percorso
+/// diventerebbe un oracolo di lettura del filesystem, e i messaggi d'errore dello scope
+/// citano un valore preso dal file.
+///
+/// Contiene un PERCORSO, mai dei valori: il file d'ingaggio resta dov'e'.
+fn save_engagement_file(path: Option<&str>) {
+    let dir = config_dir();
+    let _ = fs::create_dir_all(&dir);
+    let target = dir.join("engagement.json");
+    match path {
+        Some(p) => {
+            let content = json!({ "scope_file": p });
+            let _ = fs::write(target, serde_json::to_string_pretty(&content).unwrap());
+        }
+        None => {
+            let _ = fs::remove_file(target);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Utilita'
 // ---------------------------------------------------------------------------
@@ -162,6 +189,19 @@ fn spawn_sidecar(exe: &std::path::Path, host: &str, port: u16) -> std::io::Resul
 /// Codice d'uscita che il backend usa per segnalare un conflitto di porta.
 const EXIT_PORT_CONFLICT: i32 = 76;
 
+/// Configurazione non utilizzabile (EX_CONFIG): p.es. un file di ingaggio malformato.
+/// Distinto dal 76 perche' la cura e' diversa - li' si cambia porta, qui si cambia un
+/// file - e perche' senza un codice dedicato l'utente vedrebbe solo "il backend si e'
+/// chiuso inaspettatamente", che non dice quale file rileggere.
+const EXIT_BAD_CONFIG: i32 = 78;
+
+/// Percorso del log del backend, calcolato e non scritto a mano: il messaggio
+/// annunciava %LOCALAPPDATA%\rizzo-pii\backend.log anche su Linux e macOS, dove
+/// quella variabile non esiste.
+fn backend_log_path() -> String {
+    config_dir().join("backend.log").to_string_lossy().to_string()
+}
+
 /// Ciclo di polling: attende che il backend risponda o che il processo figlio termini.
 /// Restituisce Ok(()) se il backend e' pronto, Err(msg) se il processo e' uscito o timeout.
 fn poll_backend(
@@ -196,14 +236,32 @@ fn poll_backend(
                                 let _ = splash.eval(&js);
                             }
                             return Err(format!("porta {} occupata (exit code 76)", port));
+                        } else if code == EXIT_BAD_CONFIG {
+                            // configurazione non utilizzabile: si nomina il file da
+                            // guardare, invece di lasciare l'utente davanti a un'app
+                            // che non parte e non dice perche'
+                            if let Some(splash) = handle.get_webview_window("splash") {
+                                let js = format!(
+                                    "var n=document.querySelector('.note');\
+                                     if(n){{n.textContent='Configurazione non utilizzabile: \
+                                     controlla il file di ingaggio. Dettagli in {}';}}\
+                                     var b=document.querySelector('.bar');if(b){{b.style.display='none';}}",
+                                    backend_log_path().replace('\\', "\\\\")
+                                );
+                                let _ = splash.eval(&js);
+                            }
+                            return Err(format!("configurazione non valida (exit code {})", code));
                         } else {
                             // errore generico
                             if let Some(splash) = handle.get_webview_window("splash") {
-                                let _ = splash.eval(
+                                let js = format!(
                                     "var n=document.querySelector('.note');\
-                                     if(n){n.textContent='Errore: il backend si è chiuso inaspettatamente.';}\
-                                     var b=document.querySelector('.bar');if(b){b.style.display='none';}",
+                                     if(n){{n.textContent='Errore: il backend si è chiuso \
+                                     inaspettatamente. Log: {}';}}\
+                                     var b=document.querySelector('.bar');if(b){{b.style.display='none';}}",
+                                    backend_log_path().replace('\\', "\\\\")
                                 );
+                                let _ = splash.eval(&js);
                             }
                             return Err(format!(
                                 "backend uscito con codice {}",
@@ -225,12 +283,13 @@ fn poll_backend(
     }
     // timeout raggiunto
     if let Some(splash) = handle.get_webview_window("splash") {
-        let _ = splash.eval(
+        let js = format!(
             "var n=document.querySelector('.note');\
-             if(n){n.textContent='Errore: il backend non si è avviato. \
-             Vedi il log in %LOCALAPPDATA%\\\\rizzo-pii\\\\backend.log';}\
-             var b=document.querySelector('.bar');if(b){b.style.display='none';}",
+             if(n){{n.textContent='Errore: il backend non si è avviato. Vedi il log in {}';}}\
+             var b=document.querySelector('.bar');if(b){{b.style.display='none';}}",
+            backend_log_path().replace('\\', "\\\\")
         );
+        let _ = splash.eval(&js);
     }
     Err("timeout in attesa del backend".to_string())
 }
@@ -251,7 +310,17 @@ fn save_config(host: String, port: u16, state: tauri::State<'_, ServerAddr>) {
 /// Termina l'eventuale backend in esecuzione, rilegge la configurazione e rilancia il sidecar.
 #[tauri::command]
 fn retry_backend(app_handle: tauri::AppHandle) {
-    tlog("retry_backend: chiamato");
+    restart_backend(app_handle);
+}
+
+/// Riavvio del backend, condiviso fra il pulsante dello splash e la voce di menu.
+///
+/// Cambiare ingaggio richiede un riavvio: lo scope si legge all'import di `app`, e il
+/// modello resta caricato per tutta la vita del processo. Chiudere e rilanciare il
+/// figlio costa il caricamento del checkpoint, ma e' l'unico modo per cui "ho scelto
+/// quel file" e "sto usando quel file" siano la stessa cosa.
+fn restart_backend(app_handle: tauri::AppHandle) {
+    tlog("restart_backend: chiamato");
     // termina il processo figlio precedente, se presente
     {
         let bp = app_handle.state::<BackendProcess>();
@@ -294,6 +363,16 @@ fn retry_backend(app_handle: tauri::AppHandle) {
     let handle = app_handle.clone();
     std::thread::spawn(move || {
         if poll_backend(&handle, &host, port).is_ok() {
+            // Se la finestra principale c'e' gia' - cambio di ingaggio a meta' sessione
+            // - va RICARICATA, non ricreata: costruirne una seconda con la stessa
+            // etichetta fallisce, e l'utente resterebbe davanti alla pagina di prima,
+            // con lo scope vecchio. "Ho scelto il file" e "vedo l'effetto" devono
+            // essere la stessa cosa.
+            if let Some(main) = handle.get_webview_window("main") {
+                let _ = main.eval("location.reload()");
+                let _ = main.set_focus();
+                return;
+            }
             let built = WebviewWindowBuilder::new(
                 &handle,
                 "main",
@@ -341,10 +420,49 @@ pub fn run() {
     tauri::Builder::default()
         .manage(BackendProcess(Mutex::new(None)))
         .manage(ServerAddr(Mutex::new((host.clone(), port))))
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![save_config, retry_backend])
         .setup(move |app| {
             let handle = app.handle().clone();
             let url = format!("http://{}:{}", host, port);
+
+            // --- menu nativo: la scelta dell'ingaggio ------------------------------
+            // Sta QUI e non nella pagina: il dialogo si apre dal lato Rust, quindi il
+            // frontend - che e' servito su http:// dal backend locale - non ha bisogno
+            // di alcun accesso ai comandi nativi. Esporlo via IPC significherebbe dare
+            // a una pagina remota la possibilita' di far scegliere un file.
+            let scegli = MenuItem::with_id(
+                app, "scope_pick", "Scegli file di ingaggio\u{2026}", true, None::<&str>)?;
+            let rimuovi = MenuItem::with_id(
+                app, "scope_clear", "Rimuovi ingaggio", true, None::<&str>)?;
+            let ingaggio = Submenu::with_items(app, "Ingaggio", true, &[&scegli, &rimuovi])?;
+            app.set_menu(Menu::with_items(app, &[&ingaggio])?)?;
+
+            app.on_menu_event(move |app, event| match event.id().as_ref() {
+                "scope_pick" => {
+                    let h = app.clone();
+                    // pick_file e' asincrono: la callback arriva quando l'utente ha
+                    // scelto. Se annulla, non si tocca nulla.
+                    app.dialog()
+                        .file()
+                        .add_filter("File di ingaggio (JSON)", &["json"])
+                        .pick_file(move |scelto| {
+                            if let Some(f) = scelto {
+                                let percorso = f.to_string();
+                                tlog(&format!("menu: ingaggio scelto ({} caratteri)",
+                                              percorso.len()));
+                                save_engagement_file(Some(&percorso));
+                                restart_backend(h.clone());
+                            }
+                        });
+                }
+                "scope_clear" => {
+                    tlog("menu: ingaggio rimosso");
+                    save_engagement_file(None);
+                    restart_backend(app.clone());
+                }
+                _ => {}
+            });
 
             // mostra la versione reale (da tauri.conf.json) nello splash
             let version = app.package_info().version.to_string();

@@ -134,6 +134,52 @@ class TestIlPuntatoreNonEsceDalLatoPython(PuntatoreTestCase):
                 self.assertNotIn("engagement_path().write", testo)
 
 
+class TestIlContrattoConIlLatoRust(unittest.TestCase):
+    """Rust scrive il puntatore, Python lo legge: nessun compilatore vede entrambi.
+
+    Sono due linguaggi e due processi diversi che devono concordare su un nome di file
+    e su una chiave JSON. Se qualcuno rinomina da una parte sola, non fallisce niente:
+    l'app semplicemente non trova piu' l'ingaggio, e lo scope torna vuoto — cioe' tutto
+    viene mascherato e nessuno se ne accorge finche' non serve il contrario.
+
+    E' un gemello a tutti gli effetti (`docs/GEMELLI.md`), e questo e' il solo posto in
+    cui puo' essere sorvegliato."""
+
+    def setUp(self):
+        self.rust = (ROOT / "tauri" / "src-tauri" / "src" / "lib.rs").read_text("utf-8")
+
+    def test_both_sides_use_the_same_file_name(self):
+        self.assertIn(f'"{server_config.ENGAGEMENT_FILENAME}"', self.rust)
+
+    def test_both_sides_use_the_same_json_key(self):
+        # la chiave che saved_scope_file() legge
+        self.assertIn('"scope_file"', self.rust)
+
+    def test_the_rust_side_writes_a_path_and_not_the_values(self):
+        # il file d'ingaggio resta dov'e': qui passa solo il suo percorso
+        self.assertIn('json!({ "scope_file": p })', self.rust)
+
+    def test_the_exit_codes_agree(self):
+        # 78 e 76 devono significare la stessa cosa da entrambe le parti, altrimenti
+        # lo splash mostra il messaggio sbagliato
+        self.assertIn(f"const EXIT_BAD_CONFIG: i32 = {server_config.EXIT_BAD_CONFIG};",
+                      self.rust)
+        self.assertIn(f"const EXIT_PORT_CONFLICT: i32 = {server_config.EXIT_PORT_CONFLICT};",
+                      self.rust)
+
+    def test_the_dialog_is_not_exposed_to_the_frontend(self):
+        """Il dialogo si apre dal lato Rust, non via IPC.
+
+        La pagina e' servita su http:// dal backend locale: darle accesso ai comandi
+        nativi significherebbe concederlo a un'origine remota. Le capabilities restano
+        con il solo `core:default`, e questo test lo sorveglia."""
+        capacita = (ROOT / "tauri" / "src-tauri" / "capabilities" / "default.json"
+                    ).read_text("utf-8")
+
+        self.assertNotIn("dialog:", capacita)
+        self.assertIn("generate_handler![save_config, retry_backend]", self.rust)
+
+
 class TestEntryPointDelSidecar(unittest.TestCase):
     """serve.py: cosa promette la docstring e cosa fa il codice.
 
