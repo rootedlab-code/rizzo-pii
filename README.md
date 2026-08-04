@@ -1,3 +1,21 @@
+> ### 🔎 Fork note — the security work is on the [`dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev) branch, not here
+>
+> This branch mirrors the upstream project. The additions built on top of it — an **opt-in
+> detector pack** for security documents (IP, domains, URLs, hashes, MAC, wallets, cloud IDs,
+> ASN), a **role-aware policy** (the adversary's indicators stay readable, the client's do not),
+> an **engagement scope**, and a checkpoint fine-tuned on the security document genre — live on
+> [**`dev`**](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
+>
+> - Model: [`dr3x1/rizzo-pii-0.3B-security`](https://huggingface.co/dr3x1/rizzo-pii-0.3B-security) — recall 0.737 → 0.808 on a blind 1,000-row sample, per-tag table in the model card
+> - Dataset: [`dr3x1/rizzo-pii-security-it`](https://huggingface.co/datasets/dr3x1/rizzo-pii-security-it)
+>
+> ⚠️ **The fine-tuned model alone does not anonymize a security report.** It covers the soft
+> tags; the technical indicators are handled by the detector pack, which is code, not weights.
+> Used on its own it leaves *mangled* addresses (`203.[ID_DOC_1]42`) — a document that looks
+> protected exactly where it is not. Read the model card before using it.
+>
+> Upstream project by **Simone Rizzo** — everything below is his.
+
 <div align="center">
 
 <img src="report/images/mascot_shield.png" alt="rizzo-pii mascot — a purple hedgehog guarding a document with a shield" width="180" />
