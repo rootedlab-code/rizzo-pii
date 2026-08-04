@@ -19,6 +19,7 @@ dall'app Tauri per mostrare il form di configurazione nello splash.
 
 import json
 import os
+import re
 import socket
 import sys
 from pathlib import Path
@@ -26,6 +27,9 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5005
 EXIT_PORT_CONFLICT = 76  # riconosciuto da Tauri (lib.rs) come "porta occupata"
+
+# Nome con cui il modello viene impacchettato dentro l'eseguibile (vedi build.spec).
+BUNDLED_MODEL_NAME = "pii_model"
 
 
 def config_dir() -> Path:
@@ -72,6 +76,62 @@ def resolve(cli_host=None, cli_port=None):
     host = cli_host or os.environ.get("PII_HOST") or cfg.get("host") or DEFAULT_HOST
     port = cli_port or os.environ.get("PII_PORT") or cfg.get("port") or DEFAULT_PORT
     return str(host), int(port)
+
+
+def _is_model_dir(path) -> bool:
+    """Una directory e' un checkpoint se contiene config.json.
+
+    Non basta che esista: puntare il modello a una cartella vuota fa fallire il
+    caricamento secondi dopo, dentro transformers, con un errore che non nomina la
+    variabile sbagliata."""
+    return path is not None and Path(path).is_dir() and (Path(path) / "config.json").is_file()
+
+
+def _newest_versioned(models_root: Path):
+    """L'ultima directory rizzo-pii-0.3B-vX.Y.Z, per numero di versione e non per nome.
+
+    Ordinare per stringa metterebbe la v10 prima della v9."""
+    versioned = [p for p in models_root.glob("rizzo-pii-0.3B-v*") if p.is_dir()]
+    if not versioned:
+        return None
+    return max(versioned, key=lambda p: tuple(
+        int(x) for x in re.search(r"-v([0-9][0-9.]*)$", p.name).group(1).split(".")))
+
+
+def resolve_model_dir(override=None, bundled=None, models_root=None,
+                      pinned_version=None, warn=None) -> str:
+    """Quale checkpoint caricare: override esplicito > modello impacchettato > sviluppo.
+
+    **L'override viene per primo, e questa e' la correzione.** Prima l'ordine era
+    invertito: dentro l'eseguibile `sys._MEIPASS` esiste sempre, quindi il ramo
+    PII_MODEL_DIR era irraggiungibile e chi installava l'app non poteva puntarla a un
+    altro checkpoint nemmeno sapendo cosa stava facendo. Il modello impacchettato e' un
+    default, non un lucchetto.
+
+    Un override rotto **non e' fatale**: si avvisa e si ricade sul modello impacchettato.
+    Farlo morire qui ucciderebbe il sidecar prima ancora che Flask apra la porta, e
+    l'app desktop mostrerebbe solo "il backend si e' chiuso inaspettatamente" — un
+    messaggio che non aiuta a trovare una variabile d'ambiente stantia.
+
+    In sviluppo: versione fissata > ultima versionata > rizzo-pii-0.3B > legacy.
+    """
+    if override:
+        if _is_model_dir(override):
+            return str(override)
+        (warn or print)(
+            f"ATTENZIONE: PII_MODEL_DIR={override} non e' un checkpoint "
+            f"(manca la directory o il suo config.json). Uso il modello predefinito.")
+    if bundled:
+        return str(bundled)
+    models_root = Path(models_root)
+    pinned = models_root / f"rizzo-pii-0.3B-v{pinned_version}" if pinned_version else None
+    if pinned is not None and pinned.is_dir():
+        return str(pinned)
+    newest = _newest_versioned(models_root)
+    if newest is not None:
+        return str(newest)
+    prod = models_root / "rizzo-pii-0.3B"
+    return str(prod if prod.exists() else models_root / "pii_model_legacy")
 
 
 def port_available(host: str, port: int) -> bool:
