@@ -17,6 +17,7 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
 # Stessa sorgente di build.spec e degli script di build: vedi il commento la'.
 # Override: PII_BUILD_MODEL=models/altro-checkpoint pyinstaller build_sidecar.spec
 import os
+import sys
 from pathlib import Path
 
 MODEL = os.environ.get("PII_BUILD_MODEL", "models/rizzo-pii-0.3B-security")
@@ -24,6 +25,16 @@ if not (Path(MODEL) / "config.json").is_file():
     raise SystemExit(f"ERRORE: {MODEL} non e' un checkpoint (manca config.json). "
                      f"Scaricalo o indica PII_BUILD_MODEL.")
 datas += [(MODEL, "pii_model")]
+
+# Il timbro: vedi build.spec. Dentro il pacchetto la directory si chiama "pii_model"
+# per tutti, quindi il nome vero si congela qui.
+sys.path.insert(0, "src/app")
+import model_info  # noqa: E402
+
+Path("build").mkdir(exist_ok=True)
+_stamp = Path("build") / model_info.STAMP_NAME
+print(f"[build] timbro: {model_info.write_stamp(MODEL, _stamp, name=Path(MODEL).name)}")
+datas += [(str(_stamp), "pii_model")]
 datas += [("src/app/assets", "assets")]
 hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
 

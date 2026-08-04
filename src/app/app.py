@@ -32,6 +32,7 @@ from flask import (Flask, jsonify, render_template_string, request,
                    send_from_directory)
 
 import detectors_cyber
+import model_info
 import policy
 import scope
 import server_config
@@ -57,6 +58,11 @@ MODEL_DIR = server_config.resolve_model_dir(
     models_root=Path(__file__).resolve().parents[2] / "models",
     pinned_version=APP_MODEL_VERSION,
 )
+
+# Il timbro scritto al build (None sui pacchetti precedenti): dentro l'eseguibile la
+# directory si chiama "pii_model" per tutti, quindi senza timbro non c'e' modo di sapere
+# quale dei due checkpoint da 1,2 GB sta girando.
+MODEL_INFO = model_info.read_stamp(MODEL_DIR)
 
 ASSETS_DIR = _resource_path("assets")   # mascotte / icone (servite su /assets/<file>)
 APP_VERSION = "1.0.0"                    # versione mostrata nell'UI (allineata a tauri.conf.json)
@@ -555,6 +561,24 @@ def config_get():
     })
 
 
+@app.route("/model", methods=["GET"])
+def model_get():
+    """Quale checkpoint sta girando. Sola lettura: il modello non si cambia a caldo.
+
+    Senza il timbro (pacchetti costruiti prima che esistesse) si risponde
+    identified=false invece di indovinare un nome dalla directory, che dentro
+    l'eseguibile si chiama "pii_model" per tutti."""
+    # label2id, non id2label: e' il campo che legge known_tags() (la tassonomia della
+    # policy). Leggerne uno diverso qui creerebbe due risposte alla stessa domanda.
+    cfg = getattr(getattr(nlp, "model", None), "config", None)
+    etichette = len(getattr(cfg, "label2id", None) or {})
+    if MODEL_INFO:
+        return jsonify({**MODEL_INFO, "identified": True,
+                        "labels": MODEL_INFO.get("labels") or etichette})
+    return jsonify({"identified": False, "name": Path(MODEL_DIR).name,
+                    "labels": etichette, "sha256": None})
+
+
 @app.route("/config", methods=["POST"])
 def config_post():
     data = request.get_json(silent=True) or {}
@@ -1036,6 +1060,10 @@ PAGE = r"""
       <input id="cfgKeep" type="text" placeholder="AGE,GENDER" spellcheck="false">
       <span class="sub" data-i18n="cfg_keep_note">Elenco separato da virgole; vuoto = maschera tutto.</span>
     </div>
+    <div class="cfg-row">
+      <label data-i18n="cfg_model">Modello</label>
+      <span class="sub" id="cfgModel">—</span>
+    </div>
     <div class="cfg-status" id="cfgStatus"></div>
     <div class="cfg-btns">
       <button class="btn" id="cfgSave" onclick="saveConfig()">💾 <span data-i18n="cfg_save">Salva</span></button>
@@ -1098,6 +1126,9 @@ const T = {
   cfg_restart_note:"Indirizzo e porta valgono dal prossimo avvio; la policy si applica subito.",
   cfg_profile:"Profilo di anonimizzazione", cfg_keep:"Tag lasciati in chiaro",
   cfg_keep_note:"Elenco separato da virgole; vuoto = maschera tutto.",
+  cfg_model:"Modello",
+  cfg_model_unknown:"non identificato (pacchetto precedente al timbro)",
+  cfg_model_labels:n=>n+" etichette",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -1142,6 +1173,9 @@ const T = {
   cfg_restart_note:"Host and port apply on next startup; the policy applies immediately.",
   cfg_profile:"Anonymization profile", cfg_keep:"Tags left in clear",
   cfg_keep_note:"Comma-separated list; empty = mask everything.",
+  cfg_model:"Model",
+  cfg_model_unknown:"unidentified (package predates the stamp)",
+  cfg_model_labels:n=>n+" labels",
  }
 };
 const tt=k=>T[L][k];
@@ -1366,6 +1400,16 @@ async function openConfig(){
     sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');};
     $('cfgKeep').value=(p.keep_tags||[]).join(',');
     $('cfgKeep').title=(p.known_tags||[]).join(', ');
+  }catch{}
+  try{
+    // sola lettura: il modello non si cambia a caldo. Serve a rispondere a "quale dei
+    // due checkpoint sto usando?", che dentro un pacchetto era senza risposta.
+    const m=await (await fetch('/model')).json();
+    const el=$('cfgModel');
+    el.textContent=m.identified
+      ? m.name+' · '+tt('cfg_model_labels')(m.labels)
+      : tt('cfg_model_unknown');
+    el.title=m.sha256?('sha256 '+m.sha256):'';
   }catch{}
   $('cfgStatus').className='cfg-status';$('cfgStatus').textContent='';
   $('cfgOverlay').classList.add('open');
