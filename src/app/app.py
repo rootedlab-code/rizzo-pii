@@ -1064,6 +1064,9 @@ PAGE = r"""
   .cfg-status.fail{display:block;background:#fef2f2;color:#b91c1c}
   /* ambra: non e' un errore (nulla e' fallito), e' una promessa che non puo' valere */
   .cfg-status.warn{display:block;background:#fffbeb;color:#92400e}
+  /* dove il detector DOMAIN non SA: non e' un errore, e' un "guarda qui" */
+  .avviso{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:9px;
+          padding:9px 12px;font-size:12.5px;line-height:1.5;margin-bottom:12px}
   .cfg-check{flex-direction:row;align-items:flex-start;gap:9px}
   .cfg-check input{width:16px;height:16px;margin-top:2px;flex:none}
   .cfg-check label{text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);
@@ -1165,6 +1168,7 @@ PAGE = r"""
       </div>
       <div class="bd">
         <div class="meta" id="meta"></div>
+        <div class="avviso" id="avviso" style="display:none"></div>
         <div class="legend" id="legend"></div>
         <div class="tablewrap" id="tablewrap">
           <table><thead><tr><th data-i18n="th_id">ID</th><th data-i18n="th_val">Valore originale</th><th data-i18n="th_type">Tipo</th></tr></thead>
@@ -1333,6 +1337,8 @@ const T = {
   cfg_scope_counts:(n,r)=>n+" voci ("+r+")",
   cfg_scope_ctx_on:r=>"contesto: acceso ("+r+")",
   cfg_scope_ctx_off:"contesto: spento",
+  warn_tld_title:"Da controllare a mano:",
+  warn_tld:e=>"il testo contiene token a forma di dominio con estensioni che non conosco ("+e+"). Se sono domini, NON sono stati mascherati: dichiarali nel file di ingaggio oppure verificali prima di inviare il testo.",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -1392,6 +1398,8 @@ const T = {
   cfg_scope_counts:(n,r)=>n+" entries ("+r+")",
   cfg_scope_ctx_on:r=>"context: on ("+r+")",
   cfg_scope_ctx_off:"context: off",
+  warn_tld_title:"Check these by hand:",
+  warn_tld:e=>"the text contains domain-shaped tokens with extensions I do not know ("+e+"). If they are domains, they were NOT masked: declare them in the engagement file, or check them before sending the text.",
  }
 };
 const tt=k=>T[L][k];
@@ -1496,6 +1504,18 @@ function render(){
     `<span class="stat"><b>${(d.by_source.modello||0)}</b> ${tt('st_model')}</span>`+
     `<span class="stat"><b>${(d.by_source.regex||0)}</b> ${tt('st_regex')}</span>`+
     `<span class="stat"><b>${T[L].chars(d.n_chars)}</b> ${tt('st_chars')}</span>`;
+  // AVVISO: dove il detector DOMAIN non SA. Fino a oggi questo dato veniva calcolato,
+  // restituito dall'API e mai mostrato: l'unico segnale che il sistema produce quando
+  // puo' aver mancato qualcosa non arrivava a chi guarda lo schermo. E' il difetto che
+  // su un documento vero ha lasciato il dominio del committente in chiaro sette volte,
+  // mentre gli URL con lo stesso dominio erano mascherati - cioe' un documento che
+  // sembrava protetto proprio dove non lo era.
+  const av=$('avviso'); const ign=d.tld_sconosciuti||{};
+  const estensioni=Object.keys(ign);
+  if(estensioni.length){
+    av.style.display='';
+    av.innerHTML='<b>'+tt('warn_tld_title')+'</b> '+tt('warn_tld')(estensioni.join(', '));
+  }else{ av.style.display='none'; av.innerHTML=''; }
   // legenda cliccabile (toggle highlight)
   const lg=$('legend');lg.innerHTML='';
   for(const [k,v] of Object.entries(d.by_label)){

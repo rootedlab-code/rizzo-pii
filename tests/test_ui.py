@@ -67,6 +67,20 @@ class TestControlli(UITestCase):
     def test_the_profile_warning_area_is_on_the_page(self):
         self.assertIn('id="cfgProfileNote"', self.html)
 
+    def test_the_unknown_tld_warning_reaches_the_screen(self):
+        """L'unico segnale che il sistema produce quando puo' aver mancato qualcosa.
+
+        `unknown_tld_tokens()` esiste perche' 'una lista chiusa deve dire quando non
+        sa': su un documento vero il dominio del committente e' uscito in chiaro sette
+        volte, con un TLD fuori dai 119 della lista, mentre gli URL che contenevano lo
+        stesso dominio erano mascherati — un documento che sembrava protetto proprio
+        dove non lo era.
+
+        Il dato veniva calcolato e restituito dall'API, e **non renderizzato da
+        nessuna parte**: la risposta esisteva e non arrivava a chi guarda lo schermo."""
+        self.assertIn('id="avviso"', self.html)
+        self.assertIn("tld_sconosciuti", self.html)
+
     def test_there_is_an_amber_style_that_is_not_an_error(self):
         # un profilo che non puo' mantenere la promessa non e' un fallimento: usare
         # il rosso direbbe all'utente che qualcosa e' andato storto, e non e' vero
