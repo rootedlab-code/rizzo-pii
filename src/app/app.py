@@ -811,6 +811,11 @@ def scope_get():
     return jsonify({
         **SCOPE.as_dict(),
         "scope_file": str(path) if path else None,
+        # Il nome del file separato dal percorso: l'interfaccia mostra solo questo.
+        # Il percorso completo nomina il cliente ("C:\\ingaggi\\ACME_SpA\\scope.json") e
+        # i modali finiscono negli screenshot dei report.
+        "name": path.name if path else None,
+        "is_empty": SCOPE.is_empty(),
         "roles": list(scope.ROLES),
         "unknown_role": scope.ROLE_UNKNOWN,
     })
@@ -1244,6 +1249,10 @@ PAGE = r"""
       <span class="sub" data-i18n="cfg_keep_note">Elenco separato da virgole; vuoto = maschera tutto.</span>
     </div>
     <div class="cfg-row">
+      <label data-i18n="cfg_scope">File di ingaggio (scope)</label>
+      <span class="sub" id="cfgScope">—</span>
+    </div>
+    <div class="cfg-row">
       <label data-i18n="cfg_model">Modello</label>
       <span class="sub" id="cfgModel">—</span>
     </div>
@@ -1318,6 +1327,12 @@ const T = {
   cfg_model:"Modello",
   cfg_model_unknown:"non identificato (pacchetto precedente al timbro)",
   cfg_model_labels:n=>n+" etichette",
+  cfg_scope:"File di ingaggio (scope)",
+  cfg_scope_none:"nessuno: ogni valore e\u2019 \u00abunknown\u00bb e viene mascherato",
+  cfg_scope_cli:"si indica con --scope-file o PII_SCOPE_FILE",
+  cfg_scope_counts:(n,r)=>n+" voci ("+r+")",
+  cfg_scope_ctx_on:r=>"contesto: acceso ("+r+")",
+  cfg_scope_ctx_off:"contesto: spento",
  },
  en:{
   tagline:"local model on CPU · GDPR compliant", badge:"100% local",
@@ -1371,6 +1386,12 @@ const T = {
   cfg_model:"Model",
   cfg_model_unknown:"unidentified (package predates the stamp)",
   cfg_model_labels:n=>n+" labels",
+  cfg_scope:"Engagement file (scope)",
+  cfg_scope_none:"none: every value is \u201cunknown\u201d and gets masked",
+  cfg_scope_cli:"set it with --scope-file or PII_SCOPE_FILE",
+  cfg_scope_counts:(n,r)=>n+" entries ("+r+")",
+  cfg_scope_ctx_on:r=>"context: on ("+r+")",
+  cfg_scope_ctx_off:"context: off",
  }
 };
 const tt=k=>T[L][k];
@@ -1610,6 +1631,25 @@ async function openConfig(){
     sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');mostraNota();};
     $('cfgKeep').value=(p.keep_tags||[]).join(',');
     $('cfgKeep').title=(p.known_tags||[]).join(', ');
+  }catch{}
+  try{
+    // Sola lettura: il file di ingaggio non entra da qui. Contiene gli IP del cliente
+    // e gli indicatori dell'avversario, e /scope non ha un POST proprio per questo.
+    // Si mostra il NOME del file, non il percorso: quello nomina il cliente, e i
+    // modali finiscono negli screenshot dei report.
+    const sc=await (await fetch('/scope')).json();
+    const el=$('cfgScope');
+    if(sc.is_empty){
+      el.textContent=tt('cfg_scope_none')+' \u00b7 '+tt('cfg_scope_cli');
+      el.title='';
+    }else{
+      const voci=Object.entries(sc.counts||{}).map(([r,tags])=>
+        tt('cfg_scope_counts')(Object.values(tags).reduce((a,b)=>a+b,0), r));
+      const ctx=(sc.context_roles||[]).length
+        ? tt('cfg_scope_ctx_on')(sc.context_roles.join(', ')) : tt('cfg_scope_ctx_off');
+      el.textContent=(sc.name||'?')+' \u00b7 '+voci.join(', ')+' \u00b7 '+ctx;
+      el.title=sc.name||'';
+    }
   }catch{}
   try{
     // sola lettura: il modello non si cambia a caldo. Serve a rispondere a "quale dei
