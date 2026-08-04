@@ -233,6 +233,21 @@ class TestAnalyze(PackPolicyTestCase):
         app.enable_packs([])
         self.assertEqual(app.analyze(TEXT)["packs"], [])
 
+    def test_the_reported_packs_are_the_ones_the_detectors_came_from(self):
+        """La fotografia deve comprendere i DETECTOR, non solo la policy.
+
+        detect_regex() leggeva la globale mentre il resto dell'analisi usava lo scatto,
+        e i 'packs' della risposta erano riletti alla fine: un /detectors arrivato a
+        meta' documento cambiava cosa veniva cercato e cosa la risposta dichiarava, in
+        due momenti diversi. Qui si prova la coerenza fra i due."""
+        app.enable_packs(["cyber"])
+
+        out = app.analyze(TEXT)
+
+        etichette = {s["label"] for s in self.entity_segments(out)}
+        self.assertEqual(out["packs"], ["cyber"])
+        self.assertIn("IP", etichette)          # il pacchetto dichiarato ha davvero agito
+
     def test_the_reported_policy_is_the_one_the_segments_obey(self):
         # la policy si cambia a caldo da /policy mentre un'analisi e' in corso: senza
         # la fotografia presa in cima, meta' documento seguirebbe una regola e meta'

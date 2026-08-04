@@ -318,10 +318,15 @@ except scope.ScopeError as _exc:
     raise SystemExit(1)
 
 
-def detect_regex(text):
-    """Entita' della rete regex. validated=True solo quando il checksum passa."""
+def detect_regex(text, detectors=None):
+    """Entita' della rete regex. validated=True solo quando il checksum passa.
+
+    `detectors` arriva dalla fotografia presa in cima ad analyze(): senza, questa
+    funzione leggerebbe la globale mentre il resto dell'analisi usa lo scatto, e un
+    /detectors arrivato a meta' documento cambierebbe cosa viene cercato ma non cosa
+    la risposta dichiara."""
     ents = []
-    for label, rx, validator, strict in ACTIVE_DETECTORS:
+    for label, rx, validator, strict in (ACTIVE_DETECTORS if detectors is None else detectors):
         for m in rx.finditer(text):
             ok = validator(m.group(0)) if validator else False
             if validator and strict and not ok:
@@ -454,12 +459,13 @@ def analyze(text):
     # richiesta iniziata prima del cambio finisca **interamente** con la configurazione
     # vecchia, che e' il comportamento corretto.
     pol, keeps, ambito = POLICY, ACTIVE_KEEP, SCOPE
+    dets, packs = ACTIVE_DETECTORS, list(ACTIVE_PACKS)
     model_ents, n_chunks = detect_model(text)
     # I valori DICHIARATI nel file di scope entrano fra i candidati come gli altri:
     # sono una dichiarazione dell'analista, non un'ipotesi che una regex deve
     # confermare. Senza, un dominio elencato come `own` ma con un TLD fuori dalla
     # lista dei 119 esce in chiaro mentre il file dice di proteggerlo.
-    cands = model_ents + detect_regex(text) + ambito.declared_entities(text)
+    cands = model_ents + detect_regex(text, dets) + ambito.declared_entities(text)
     cands = drop_protected(cands, text, keeps)   # keeplist: i riferimenti pubblici restano
     kept = _merge(cands, text)
 
@@ -533,7 +539,7 @@ def analyze(text):
         # la policy DAVVERO applicata, non quella attiva adesso: fra l'inizio e la fine
         # dell'analisi qualcuno puo' averla cambiata da /policy.
         "policy": pol.as_dict(),
-        "packs": list(ACTIVE_PACKS),
+        "packs": packs,
         # conteggi, mai i valori: il file di scope contiene gli indirizzi del cliente
         # e gli indicatori dell'avversario e non deve uscire nemmeno da qui.
         "scope": ambito.as_dict(),
@@ -724,10 +730,16 @@ def policy_post():
         # I pacchetti PRIMA della validazione dei tag: known_tags() legge
         # ACTIVE_DETECTORS, e un profilo che ha bisogno di 'cyber' deve poter accettare
         # i suoi tag nello stesso salvataggio in cui viene scelto.
+        prima = list(ACTIVE_PACKS)
         accesi = _accendi_pacchetti_del_profilo(profile)
         keep = policy.parse_tags(data.get("keep_tags"))
         unknown = sorted(set(keep) - known_tags())
         if unknown:
+            # Una richiesta rifiutata non deve lasciare traccia. Senza questo ripristino
+            # i pacchetti restavano accesi in memoria mentre policy.json - che si
+            # scrive solo piu' sotto - non ne sapeva nulla: stato in esecuzione e stato
+            # salvato divergenti, cioe' il difetto che questo lavoro esiste per chiudere.
+            enable_packs(prima)
             return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
         POLICY = _riscrivi_policy(profile, keep)
         mancanti = _requisiti_mancanti(profile)

@@ -59,13 +59,23 @@ TEXT = (f"Per ogni comunicazione scrivere a {EMAIL}; il pagamento di € 12.500,
 
 
 class AnalyzeTestCase(unittest.TestCase):
+    """Isola lo stato globale del modulo `app`: policy E pacchetti di detector.
+
+    I pacchetti sono entrati qui il 2026-08-04. Prima questa classe si limitava alla
+    policy, e i test funzionavano solo perche' nessuno li salvava: da quando salvare la
+    policy registra anche i detector attivi, un pacchetto lasciato acceso da un ALTRO
+    file di test comparirebbe in policy.json e cambierebbe il risultato di test che non
+    lo nominano nemmeno. Era una dipendenza dall'ordine gia' presente e invisibile."""
 
     def setUp(self):
         self._orig = app.POLICY
+        self._packs = list(app.ACTIVE_PACKS)
         app.POLICY = policy.Policy()          # default: maschera tutto
+        app.enable_packs([])                  # default: solo la rete core
 
     def tearDown(self):
         app.POLICY = self._orig
+        app.enable_packs(self._packs)
 
     def entity_segments(self, out):
         return [s for s in out["segments"] if s.get("label")]

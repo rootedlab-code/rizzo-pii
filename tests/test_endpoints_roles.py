@@ -246,6 +246,21 @@ class TestSecurityReportProfileIsHonest(EndpointTestCase):
 
         self.assertIn("cyber", app.ACTIVE_PACKS)
 
+    def test_a_rejected_save_does_not_leave_the_pack_enabled(self):
+        """Una richiesta rifiutata non deve lasciare traccia.
+
+        Il profilo accende i pacchetti PRIMA di validare i tag — deve, perche'
+        known_tags() legge i detector attivi. Ma se poi la validazione fallisce, il
+        file non viene scritto: senza ripristino i pacchetti restavano accesi in
+        memoria mentre policy.json non ne sapeva nulla, cioe' stato in esecuzione e
+        stato salvato divergenti. Trovato provando gli endpoint sul server vero."""
+        r = self.client.post("/policy", json={"profile": "security-report",
+                                              "keep_tags": "NONESISTE"})
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(app.ACTIVE_PACKS, ())
+        self.assertEqual(policy.saved_detectors(), [])
+
     def test_get_policy_exposes_the_role_rules_of_every_profile(self):
         # senza, nella tendina 'security-report' e 'full' sono tipograficamente
         # identici: entrambi con l'elenco dei tag vuoto
