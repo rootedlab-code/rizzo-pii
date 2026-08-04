@@ -74,7 +74,19 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
 - `inspect_ai4privacy.py` (conteggi lingue/tag), `inspect_lengths.py` (lunghezze), `inspect_no_iban.py`.
 
 **App di anonimizzazione locale — `src/app/` (+ packaging in `docs/BUILD.md`):**
+- `model_info.py` — **il timbro del checkpoint** (`model_info.json` accanto ai pesi: nome, sha256,
+  numero di etichette). Esiste perché i due checkpoint hanno `id2label` identico a 44 etichette e
+  dentro un pacchetto `MODEL_DIR` è sempre `.../pii_model`: senza timbro, da un'app in esecuzione
+  non c'era modo di sapere quale dei due fosse caricato. Si calcola **al build** (gli spec lo
+  scrivono, ~0,6 s) e si legge all'avvio; `GET /model` lo espone, in sola lettura. Senza timbro
+  risponde `identified: false` invece di indovinare un nome. Modulo puro (stdlib) → importabile
+  da uno spec PyInstaller e testabile senza torch.
 - `server_config.py` — **configurazione host/porta** condivisa tra tutti gli entry point e con Tauri.
+  Ospita anche `resolve_model_dir()`: **PII_MODEL_DIR > modello impacchettato > albero di sviluppo**.
+  L'ordine conta ed è una correzione: prima il ramo `sys._MEIPASS` veniva per primo, e dentro un
+  pacchetto quella variabile esiste sempre → l'override era **codice morto**. Un override rotto non
+  è fatale (avvisa e ricade sul modello impacchettato): morire lì ucciderebbe il sidecar prima che
+  Flask apra la porta, e Tauri mostrerebbe solo «il backend si è chiuso inaspettatamente».
   Catena di precedenza: **CLI `--host`/`--port` > env `PII_HOST`/`PII_PORT` > `config.json` > default
   `127.0.0.1:5005`**. Il config.json è in `%LOCALAPPDATA%\rizzo-pii\` (Windows) /
   `~/.local/share/rizzo-pii/` (Linux) / `~/Library/Application Support/rizzo-pii/` (macOS), lo

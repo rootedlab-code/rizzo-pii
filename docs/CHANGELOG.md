@@ -5,6 +5,46 @@ Le voci più recenti in alto. (Codice: `src/training/train_pii.py` salvo diverso
 
 ---
 
+## 2026-08-04 — L'app desktop impacchetta il modello che ha superato il criterio
+
+Fino a oggi `rizzo-pii-security` esisteva come repository, non come prodotto: chi installava
+l'app otteneva il checkpoint di partenza, e le capacità di sicurezza erano raggiungibili solo
+da terminale. Prima fase del lavoro descritto in `PIANO-app-desktop-2026-08-04.md`.
+
+**Il build era già rotto, e nessuno poteva accorgersene senza lanciarlo.** Lo stesso path del
+modello era scritto a mano in **quattro** file (`build.spec`, `build_sidecar.spec`,
+`build_linux.sh`, `build_mac.sh`), tenuti allineati da un commento, e puntavano tutti a
+`models/rizzo-pii-0.3B-v1.2.0`, che in questa repo non esiste più. Ora leggono tutti
+`PII_BUILD_MODEL`, e se la directory non contiene un `config.json` il build si ferma subito
+invece di produrre un pacchetto da 1,8 GB con dentro una cartella vuota.
+
+**Il default diventa `rizzo-pii-0.3B-security`**, e non è una preferenza: è l'esito di
+`CRITERIO.md`, depositato prima della misura e superato su un campione cieco (recall
+0.737 → 0.808, regole A/B/C, zero tag in regressione), migliore **anche** sul dominio legale che
+è il caso d'uso in produzione. Continuare a spedire il checkpoint di partenza significherebbe
+aver speso l'unico campione cieco rimasto per un risultato che nessun utente riceve. Da tenere
+presente al prossimo giro: **non resta alcun campione cieco**, quindi una ricetta futura richiede
+un insieme da una fonte diversa.
+
+**`PII_MODEL_DIR` era codice morto dentro l'eseguibile.** Il ramo `sys._MEIPASS` veniva per primo
+e in un pacchetto quella variabile esiste sempre: nessuno poteva puntare l'app installata a un
+altro checkpoint, nemmeno sapendo esattamente cosa stava facendo. La regola è uscita da un `if` a
+livello di modulo ed è diventata `server_config.resolve_model_dir()`, una funzione pura di cui si
+può affermare la precedenza. `src/training/test_pii.py` ne aveva una copia con meccanica diversa
+(non validava l'override, ordinava le versioni con un'altra chiave): ora condividono la meccanica,
+mentre la **politica** resta diversa e voluta — l'app fissa una versione perché il prodotto
+spedito dev'essere riproducibile, la CLI prende l'ultima perché serve a provare ciò che si è
+appena addestrato.
+
+**Il timbro del checkpoint** (`model_info.py`, gemello nuovo in `GEMELLI.md`): i due modelli hanno
+`id2label` identico a 44 etichette e nel pacchetto la directory si chiama `pii_model` per
+entrambi, quindi da un'app in esecuzione era **impossibile** sapere quale stesse girando. Ora gli
+spec scrivono nome, impronta sha256 dei pesi e numero di etichette accanto ai pesi (0,63 s sul
+modello vero), `GET /model` li espone e il modale li mostra. Senza timbro — pacchetti costruiti
+prima — la risposta è `identified: false`, non un nome indovinato dalla directory.
+
+---
+
 ## 2026-08-02 — Dati sintetici del genere "documento di sicurezza"
 
 Il modello è addestrato su prosa legale italiana. I report di assessment, le timeline forensi e i

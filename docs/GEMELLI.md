@@ -121,6 +121,26 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   la baseline passava da 190 su 210 a **40** una volta corretto. Trovato inseguendo
   tutt'altro: il detector `ZIPCODE` nuovo trovava 0 CAP su 87 nel legale.
 
+- **#24** — **due checkpoint indistinguibili dall'app che li carica.** `rizzo-pii-0.3B-base` e
+  `rizzo-pii-0.3B-security` hanno `id2label` identico, 44 etichette, e dentro un pacchetto
+  PyInstaller `MODEL_DIR` è sempre `.../pii_model`: da un'app in esecuzione non c'era **nessun**
+  modo di sapere quale dei due stesse rispondendo. Un utente che riportava un risultato non poteva
+  dire su cosa l'aveva ottenuto. Chiuso da `model_info.py`: il timbro si calcola al build, quando
+  si sa ancora quale checkpoint si sta copiando, e `GET /model` lo espone. La forma del difetto è
+  la solita: **ciò che un artefatto è contro ciò che dichiara di essere**.
+
+- **#25** — **la stessa regola di risoluzione del modello, scritta due volte.** `app.py` e
+  `src/training/test_pii.py` sceglievano il checkpoint con codice diverso: la CLI non validava
+  l'override e ordinava le versioni con una chiave sua. Le due *politiche* possono divergere
+  legittimamente (l'app fissa una versione, la CLI prende l'ultima), la *meccanica* no. Ora è una
+  sola, in `server_config.resolve_model_dir()`, e un test guarda il sorgente della CLI perché
+  importarla eseguirebbe argparse e caricherebbe 1,2 GB.
+
+  Sottocaso trovato scrivendo la correzione: `GET /model` leggeva `id2label` mentre `known_tags()`
+  legge `label2id`. Due campi diversi per la stessa domanda — un gemello nuovo, introdotto proprio
+  dal commit che ne chiudeva un altro. Se ne è accorto un test che passava da solo e falliva nella
+  suite.
+
 E uno che **non** è un gemello ma appartiene alla stessa famiglia — due cose che
 dovrebbero coincidere e non coincidono — perché merita di essere ricordato:
 `predict_entities` restituiva `' Stefano Fabbri'` invece di `'Stefano Fabbri'`. Un
