@@ -314,8 +314,12 @@ POLICY = policy.load_policy(known_tags=known_tags())
 try:
     SCOPE = scope.load_scope()
 except scope.ScopeError as _exc:
-    print(f"ERRORE nel file di scope: {_exc}", file=sys.stderr)
-    raise SystemExit(1)
+    # Codice 78 e non 1: Tauri traduce qualunque codice diverso da 76 in "il backend si
+    # e' chiuso inaspettatamente", che non dice quale file rileggere. Con un codice
+    # dedicato lo splash puo' proporre di scegliere un altro ingaggio o di continuare
+    # senza. Il percorso e' nel messaggio, i valori del file no.
+    print(f"ERRORE nel file di scope ({scope.scope_path()}): {_exc}", file=sys.stderr)
+    raise SystemExit(server_config.EXIT_BAD_CONFIG)
 
 
 def detect_regex(text, detectors=None):
@@ -1709,8 +1713,8 @@ if __name__ == "__main__":
         try:
             SCOPE = scope.load_scope(_args.scope_file)
         except scope.ScopeError as _exc:
-            print(f"ERRORE nel file di scope: {_exc}")
-            sys.exit(1)
+            print(f"ERRORE nel file di scope ({_args.scope_file}): {_exc}")
+            sys.exit(server_config.EXIT_BAD_CONFIG)
     # conteggi, mai i valori: questa riga finisce nei log e negli screenshot
     _n_scope = sum(n for by_tag in SCOPE.counts().values() for n in by_tag.values())
     if _n_scope or SCOPE.context_roles:

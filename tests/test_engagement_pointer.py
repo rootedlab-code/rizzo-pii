@@ -134,5 +134,42 @@ class TestIlPuntatoreNonEsceDalLatoPython(PuntatoreTestCase):
                 self.assertNotIn("engagement_path().write", testo)
 
 
+class TestEntryPointDelSidecar(unittest.TestCase):
+    """serve.py: cosa promette la docstring e cosa fa il codice.
+
+    La stesura precedente dichiarava argomenti `--host/--port` che non ha mai letto, e
+    annunciava un percorso di log che su Linux e macOS non esiste. Un file che descrive
+    la catena di un altro modulo invece del proprio comportamento e' un difetto di
+    documentazione con conseguenze pratiche: chi cerca il log non lo trova."""
+
+    def setUp(self):
+        self.sorgente = (ROOT / "src" / "app" / "serve.py").read_text("utf-8")
+
+    def test_it_does_not_promise_command_line_arguments(self):
+        # non ha argparse, e Tauri non passa mai argv (lib.rs, spawn_sidecar)
+        self.assertNotIn("argparse", self.sorgente)
+        self.assertNotIn("--host / --port", self.sorgente)
+
+    def test_the_log_goes_where_the_configuration_lives(self):
+        # prima usava LOCALAPPDATA anche fuori da Windows, dove non esiste: il log
+        # finiva in ~/rizzo-pii/ mentre docstring e messaggi ne annunciavano un'altra
+        self.assertIn("config_dir()", self.sorgente)
+        self.assertNotIn('os.environ.get("LOCALAPPDATA"', self.sorgente)
+
+    def test_the_engagement_is_checked_before_the_model_is_loaded(self):
+        """Il pre-check costa millisecondi, l'import di app carica 1,2 GB.
+
+        Senza, chi ha un file di ingaggio rotto aspetta il caricamento completo per
+        sentirsi dire che un JSON e' malformato. Misurato: 0,026 s contro decine di
+        secondi."""
+        self.assertLess(self.sorgente.find("scope_mod.load_scope()"),
+                        self.sorgente.find("from app import app"))
+
+    def test_a_broken_engagement_exits_with_the_configuration_code(self):
+        # 78 e non 1: Tauri traduce qualunque codice diverso da 76 in "il backend si e'
+        # chiuso inaspettatamente", che non dice quale file rileggere
+        self.assertIn("EXIT_BAD_CONFIG", self.sorgente)
+
+
 if __name__ == "__main__":
     unittest.main()
