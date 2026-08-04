@@ -120,18 +120,40 @@ def load_file() -> dict:
     return {}
 
 
-def save_file(profile: str, keep_tags, keep_roles=None) -> None:
+def save_file(profile: str, keep_tags, keep_roles=None, detectors=None) -> None:
     """Scrive policy.json (crea la directory se necessario).
 
     keep_roles finisce nel file solo se c'e': un file senza quella chiave e' un file
-    di una configurazione senza ruoli, non un file a cui manca qualcosa."""
+    di una configurazione senza ruoli, non un file a cui manca qualcosa.
+
+    `detectors` sta QUI e non in config.json perche' config.json e' riscritto per
+    intero da due parti — Tauri dal lato Rust e POST /config dal modale — e una chiave
+    estranea verrebbe cancellata al primo salvataggio di host/porta. E' la stessa
+    ragione per cui esiste questo file. Sta con la policy, e non fra le impostazioni
+    d'avvio, perche' come la policy si cambia a caldo: e' "cosa cerco" accanto a
+    "cosa ne faccio"."""
     d = server_config.config_dir()
     d.mkdir(parents=True, exist_ok=True)
     payload = {"profile": profile, "keep_tags": list(parse_tags(keep_tags))}
     roles = parse_roles(keep_roles)
     if roles:
         payload["keep_roles"] = {r: list(t) for r, t in sorted(roles.items())}
+    if detectors:
+        payload["detectors"] = sorted({str(p).strip().lower() for p in detectors if str(p).strip()})
     (d / POLICY_FILENAME).write_text(json.dumps(payload, indent=2), "utf-8")
+
+
+def saved_detectors() -> list:
+    """I pacchetti di detector salvati in policy.json, o [] se non ce ne sono.
+
+    `policy.py` non li interpreta: sa solo che sono nomi da conservare e da
+    restituire. Chi decide quali esistano e' `app.py`, che ha il registro dei
+    pacchetti — invertire quella dipendenza legherebbe il modulo puro all'app."""
+    raw = load_file().get("detectors")
+    if not raw:
+        return []
+    items = raw.replace(",", " ").split() if isinstance(raw, str) else list(raw)
+    return [str(i).strip().lower() for i in items if str(i).strip()]
 
 
 def parse_tags(raw) -> tuple:

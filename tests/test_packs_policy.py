@@ -12,7 +12,9 @@ Tutti i valori sono presi dagli intervalli di documentazione (RFC 5737 / RFC 260
     python -m unittest discover -s tests
 """
 
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -67,6 +69,63 @@ class PackPolicyTestCase(unittest.TestCase):
     def tearDown(self):
         app.enable_packs(self._packs)
         app.POLICY = self._policy
+
+
+class TestPrecedenzaDeiPacchetti(unittest.TestCase):
+    """CLI > PII_DETECTORS > policy.json > nessuno.
+
+    Senza persistenza l'utente desktop dovrebbe ri-accendere i detector a ogni avvio,
+    cioe' il problema non sarebbe risolto. Il posto e' policy.json e non config.json:
+    quest'ultimo e' riscritto per intero da Tauri e da POST /config, e cancellerebbe
+    la chiave al primo salvataggio di host e porta."""
+
+    def setUp(self):
+        self._env = {k: os.environ.pop(k) for k in ("PII_DETECTORS",) if k in os.environ}
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig = policy.server_config.config_dir
+        policy.server_config.config_dir = lambda: Path(self._tmp.name)
+
+    def tearDown(self):
+        policy.server_config.config_dir = self._orig
+        self._tmp.cleanup()
+        os.environ.pop("PII_DETECTORS", None)
+        os.environ.update(self._env)
+
+    def test_nothing_configured_means_no_pack(self):
+        self.assertEqual(app.resolve_packs(), [])
+
+    def test_the_saved_detectors_are_used_when_the_environment_is_silent(self):
+        policy.save_file("full", (), detectors=["cyber"])
+
+        self.assertEqual(app.resolve_packs(), ["cyber"])
+
+    def test_the_environment_beats_the_saved_detectors(self):
+        policy.save_file("full", (), detectors=["cyber"])
+        os.environ["PII_DETECTORS"] = ""      # esplicitamente vuoto = nessun pacchetto
+
+        # una env vuota non e' una scelta: la catena prosegue, come per host/porta
+        self.assertEqual(app.resolve_packs(), ["cyber"])
+
+    def test_the_cli_beats_everything(self):
+        policy.save_file("full", (), detectors=["cyber"])
+        os.environ["PII_DETECTORS"] = "cyber"
+
+        self.assertEqual(app.resolve_packs(cli=""), ["cyber"])
+        self.assertEqual(app.resolve_packs(cli="cyber"), ["cyber"])
+
+    def test_saving_the_policy_without_detectors_writes_no_such_key(self):
+        # un file senza quella chiave e' la configurazione di chi non usa i pacchetti,
+        # non un file a cui manca qualcosa
+        policy.save_file("full", ("AGE",))
+
+        self.assertNotIn("detectors", policy.load_file())
+        self.assertEqual(policy.saved_detectors(), [])
+
+    def test_the_saved_detectors_survive_a_round_trip(self):
+        policy.save_file("security-report", ("AGE",), detectors=["cyber"])
+
+        self.assertEqual(policy.saved_detectors(), ["cyber"])
+        self.assertEqual(policy.load_file()["profile"], "security-report")
 
 
 class TestPubblicazioneAtomica(PackPolicyTestCase):

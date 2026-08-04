@@ -216,6 +216,19 @@ def parse_packs(raw):
     return [str(i).strip().lower() for i in items if str(i).strip()]
 
 
+def resolve_packs(cli=None):
+    """Quali pacchetti accendere: CLI > PII_DETECTORS > policy.json > nessuno.
+
+    Stessa catena di server_config.resolve() per host e porta. Esiste come funzione
+    perche' la precedenza sia affermabile in un test senza reimportare il modulo:
+    prima viveva dentro la riga di import e non era osservabile."""
+    for sorgente in (cli, os.environ.get("PII_DETECTORS"), policy.saved_detectors()):
+        nomi = parse_packs(sorgente)
+        if nomi:
+            return nomi
+    return []
+
+
 def enable_packs(names):
     """Ricompone i detector attivi = core + pacchetti richiesti. Ritorna quelli attivati.
 
@@ -244,7 +257,7 @@ def enable_packs(names):
     return active
 
 
-enable_packs(parse_packs(os.environ.get("PII_DETECTORS")))
+enable_packs(resolve_packs())
 
 
 def drop_protected(cands, text, keeps=None):
@@ -1497,7 +1510,7 @@ if __name__ == "__main__":
     # I pacchetti PRIMA della policy: known_tags() legge ACTIVE_DETECTORS, quindi
     # --keep-tags IP sarebbe scartato se il pacchetto cyber non fosse gia' attivo.
     if _args.detectors:
-        enable_packs(parse_packs(_args.detectors))
+        enable_packs(resolve_packs(_args.detectors))
     print("Detector attivi: core" + (f" + {', '.join(ACTIVE_PACKS)}" if ACTIVE_PACKS else ""))
 
     POLICY = policy.load_policy(cli_keep_tags=_args.keep_tags, cli_profile=_args.profile,
