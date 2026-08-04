@@ -1041,6 +1041,12 @@ PAGE = r"""
               display:none}
   .cfg-status.ok{display:block;background:#eaf7ef;color:var(--ok)}
   .cfg-status.fail{display:block;background:#fef2f2;color:#b91c1c}
+  /* ambra: non e' un errore (nulla e' fallito), e' una promessa che non puo' valere */
+  .cfg-status.warn{display:block;background:#fffbeb;color:#92400e}
+  .cfg-check{flex-direction:row;align-items:flex-start;gap:9px}
+  .cfg-check input{width:16px;height:16px;margin-top:2px;flex:none}
+  .cfg-check label{text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);
+                   font-weight:500;cursor:pointer}
   .cfg-btns{display:flex;gap:9px;align-items:center}
   .cfg-note{font-size:11.5px;color:var(--soft);margin-top:12px}
   .gear{background:none;border:1px solid var(--line);width:30px;height:30px;border-radius:8px;
@@ -1202,9 +1208,19 @@ PAGE = r"""
       <label data-i18n="cfg_port">Porta</label>
       <input id="cfgPort" type="number" min="1024" max="65535" value="5005">
     </div>
+    <div class="cfg-row cfg-check">
+      <input id="cfgPackCyber" type="checkbox">
+      <label for="cfgPackCyber" data-i18n="cfg_pack_cyber">Rilevatori per documenti di
+        sicurezza (IP, domini, URL, hash, MAC, wallet, ID cloud, ASN)</label>
+    </div>
+    <div class="cfg-row" style="margin-top:-8px">
+      <span class="sub" data-i18n="cfg_packs_note">Spento, i documenti legali si comportano
+        esattamente come prima.</span>
+    </div>
     <div class="cfg-row">
       <label data-i18n="cfg_profile">Profilo di anonimizzazione</label>
       <select id="cfgProfile"></select>
+      <span class="sub" id="cfgProfileNote" style="display:none"></span>
     </div>
     <div class="cfg-row">
       <label data-i18n="cfg_keep">Tag lasciati in chiaro</label>
@@ -1274,7 +1290,13 @@ const T = {
   cfg_check:"Verifica porta", cfg_save:"Salva", cfg_cancel:"Annulla",
   cfg_available:"Porta disponibile ✓", cfg_in_use:"Porta occupata ✗",
   cfg_saved:"Configurazione salvata",
-  cfg_restart_note:"Indirizzo e porta valgono dal prossimo avvio; la policy si applica subito.",
+  cfg_restart_note:"Indirizzo e porta valgono dal prossimo avvio; rilevatori e policy si applicano subito.",
+  cfg_pack_cyber:"Rilevatori per documenti di sicurezza (IP, domini, URL, hash, MAC, wallet, ID cloud, ASN)",
+  cfg_packs_note:"Spento, i documenti legali si comportano esattamente come prima.",
+  cfg_tags_dropped:t=>"Tag non piu\u2019 riconosciuti, tornano mascherati: "+t,
+  cfg_packs_enabled:p=>"Rilevatori attivati dal profilo: "+p,
+  cfg_profile_inert:"Questo profilo lascia in chiaro gli indicatori dell\u2019avversario, ma senza un file di ingaggio nessun valore ha un ruolo: al momento non cambia nulla.",
+  cfg_profile_roles:r=>"lascia in chiaro per ruolo: "+r,
   cfg_profile:"Profilo di anonimizzazione", cfg_keep:"Tag lasciati in chiaro",
   cfg_keep_note:"Elenco separato da virgole; vuoto = maschera tutto.",
   cfg_model:"Modello",
@@ -1321,7 +1343,13 @@ const T = {
   cfg_check:"Check port", cfg_save:"Save", cfg_cancel:"Cancel",
   cfg_available:"Port available ✓", cfg_in_use:"Port in use ✗",
   cfg_saved:"Config saved",
-  cfg_restart_note:"Host and port apply on next startup; the policy applies immediately.",
+  cfg_restart_note:"Host and port apply on next startup; detectors and policy apply immediately.",
+  cfg_pack_cyber:"Detectors for security documents (IPs, domains, URLs, hashes, MACs, wallets, cloud IDs, ASNs)",
+  cfg_packs_note:"Off, legal documents behave exactly as before.",
+  cfg_tags_dropped:t=>"Tags no longer recognized, back to masked: "+t,
+  cfg_packs_enabled:p=>"Detectors enabled by this profile: "+p,
+  cfg_profile_inert:"This profile leaves the adversary\u2019s indicators in clear, but with no engagement file no value has a role: right now it changes nothing.",
+  cfg_profile_roles:r=>"left in clear by role: "+r,
   cfg_profile:"Anonymization profile", cfg_keep:"Tags left in clear",
   cfg_keep_note:"Comma-separated list; empty = mask everything.",
   cfg_model:"Model",
@@ -1543,12 +1571,27 @@ async function openConfig(){
     const sel=$('cfgProfile');sel.innerHTML='';
     for(const name of Object.keys(p.profiles||{})){
       const o=document.createElement('option');o.value=name;
-      o.textContent=name+(p.profiles[name].length?' ('+p.profiles[name].join(', ')+')':'');
+      // l'etichetta usa anche le regole per RUOLO: senza, 'security-report' e 'full'
+      // sono due voci tipograficamente identiche e una delle due promette qualcosa
+      const ruoli=(p.profile_roles||{})[name];
+      const perRuolo=ruoli?tt('cfg_profile_roles')(Object.keys(ruoli).join(', ')):'';
+      o.textContent=name+(p.profiles[name].length?' ('+p.profiles[name].join(', ')+')':
+                          (perRuolo?' — '+perRuolo:''));
       sel.appendChild(o);}
     sel.value=p.profile;
+    $('cfgPackCyber').checked=(p.packs||[]).includes('cyber');
+    // avvisa quando il profilo scelto NON puo' mantenere la promessa. Ambra e non
+    // rosso: non e' fallito niente, e' una promessa che al momento non vale.
+    const nota=$('cfgProfileNote');
+    const mostraNota=()=>{
+      const manca=(p.requires||{})[sel.value] && (p.unmet||[]).includes('scope')
+                  && sel.value===p.profile;
+      nota.style.display=manca?'block':'none';
+      nota.textContent=manca?tt('cfg_profile_inert'):'';};
+    mostraNota();
     // cambiando profilo il campo torna ai tag di quel profilo: cosi' e' chiaro
     // quali tag arrivano dal profilo e quali sono stati aggiunti a mano
-    sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');};
+    sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');mostraNota();};
     $('cfgKeep').value=(p.keep_tags||[]).join(',');
     $('cfgKeep').title=(p.known_tags||[]).join(', ');
   }catch{}
@@ -1580,12 +1623,33 @@ async function saveConfig(){
   if(!p||p<1024||p>65535){toast(tt('cfg_in_use'),false);return;}
   await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({host:h,port:p})});
+  // I DETECTOR PRIMA DELLA POLICY, e l'ordine e' lo stesso del server: known_tags()
+  // legge i detector attivi, quindi un keep_tags 'IP' inviato prima di accendere il
+  // pacchetto verrebbe rifiutato con 400 su un valore che l'utente vede a schermo.
+  const dr=await fetch('/detectors',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({packs:$('cfgPackCyber').checked?['cyber']:[]})});
+  const dd=await dr.json();
+  if(!dr.ok){
+    $('cfgStatus').className='cfg-status fail';$('cfgStatus').textContent=dd.error||tt('t_error');
+    return;}
+  if((dd.dropped_tags||[]).length){
+    // spegnendo, quei tag escono dalla tassonomia e tornano mascherati: e' l'unica
+    // cosa che l'interfaccia non puo' dedurre da sola, e va detta prima di chiudere
+    $('cfgStatus').className='cfg-status warn';
+    $('cfgStatus').textContent=tt('cfg_tags_dropped')(dd.dropped_tags.join(', '));
+    $('cfgKeep').value=(dd.policy&&dd.policy.keep_tags||[]).join(',');}
   const pr=await fetch('/policy',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({profile:$('cfgProfile').value,keep_tags:$('cfgKeep').value})});
   const pd=await pr.json();
   if(!pr.ok){                                  // tag inesistente: resta aperto, mostra l'errore
     $('cfgStatus').className='cfg-status fail';$('cfgStatus').textContent=pd.error||tt('t_error');
     return;}
+  if((pd.packs_enabled||[]).length){
+    $('cfgPackCyber').checked=true;
+    $('cfgStatus').className='cfg-status warn';
+    $('cfgStatus').textContent=tt('cfg_packs_enabled')(pd.packs_enabled.join(', '));
+    return;}                                   // resta aperto: e' un cambiamento che va visto
+  if((dd.dropped_tags||[]).length) return;     // idem per i tag caduti
   toast(tt('cfg_saved'));
   closeConfig();
 }
