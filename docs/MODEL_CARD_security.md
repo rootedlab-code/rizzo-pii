@@ -23,6 +23,35 @@ esistenti.
 
 Serve ad anonimizzare documenti **in locale** prima di mandarli a un LLM esterno.
 
+> ## ⚠️ Da solo questo modello NON anonimizza un report di sicurezza
+>
+> Il modello copre i tag "morbidi" — nomi, date, città, organizzazioni, indirizzi — cioè
+> quelli che nessuna espressione regolare può decidere. **Non copre gli indicatori
+> tecnici**: IP, domini, URL, hash, MAC, ASN, wallet, identificativi cloud. Quelli li
+> risolve una rete di **detector deterministici** che sta nel codice, non nei pesi.
+>
+> Se lo usi da solo, l'effetto non è "l'IP resta in chiaro": è **peggio**. Misurato su
+> questo stesso checkpoint:
+>
+> ```
+> senza i detector →  ha isolato 203.[ID_DOC_1]42     ← l'indirizzo esce MUTILATO
+> con i detector   →  ha isolato [IP_1]
+> ```
+>
+> Il modello inventa un'entità su un pezzo dell'indirizzo e lascia leggibile il resto:
+> il documento **sembra** protetto proprio dove non lo è.
+>
+> **Il codice che serve — detector cyber, policy per ruolo, scope d'ingaggio — vive
+> qui:** [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
+> Non è nel repository di partenza. Comando minimo:
+>
+> ```bash
+> python src/app/app.py --detectors cyber --profile security-report \
+>                       --scope-file ~/ingaggi/acme/scope.json
+> ```
+>
+> Le tre parti e il perché sono spiegate in [Uso su documenti di sicurezza](#uso-su-documenti-di-sicurezza).
+
 ## Cosa cambia rispetto al modello di partenza
 
 Il checkpoint originale è addestrato su prosa legale italiana. Sui documenti di
@@ -132,16 +161,73 @@ partita IVA, IBAN e carte di credito quella è esatta, mentre il modello frammen
 identificatori lunghi (`RCCMRT60T58H703I` esce come `CF`+`CF`+`ID_DOC`+…). Misurato:
 `CF` passa da 0.018 col solo modello a 1.000 col checksum.
 
+## Uso su documenti di sicurezza
+
+Il sistema ha **tre assi**, e il modello è uno solo dei tre. Saltarne uno non produce un
+errore: produce un documento meno protetto di quanto sembri.
+
+| asse | domanda | chi risponde |
+|---|---|---|
+| **detection** | che tipo di dato è? | il modello (tag morbidi) **+** i detector deterministici (tag tecnici) |
+| **scope** | di chi è questo valore? | un file d'ingaggio dichiarato dall'analista |
+| **policy** | e quindi cosa ne faccio? | profilo + regole per *(tag, ruolo)* |
+
+**Perché lo scope non è un dettaglio.** In un report l'indirizzo del C2 dell'avversario è
+l'oggetto del documento: mascherarlo lo rende inutile e non protegge nessuno. L'indirizzo
+del cliente va mascherato. Sono **due IP, identici nella forma, con trattamento opposto** —
+`--keep-tags IP` non può esprimerlo, perché `IP` è un tag solo.
+
+```bash
+python src/app/app.py --detectors cyber --profile security-report \
+                      --scope-file ~/ingaggi/acme/scope.json
+```
+
+```json
+{
+  "own":       {"IP": ["10.0.0.0/8", "203.0.113.5"], "DOMAIN": ["client.example"]},
+  "adversary": {"IP": ["198.51.100.7"], "DOMAIN": ["evil.example"]}
+}
+```
+
+Risultato, misurato su questo checkpoint:
+
+```
+Il [DATE_1] [FULLNAME_1] ha rilevato il C2 198.51.100.7 (evil.invalid)
+verso il nostro host [IP_1].
+```
+
+Il file d'ingaggio elenca gli indirizzi del cliente e gli indicatori dell'avversario:
+è **il file più sensibile del sistema**. Non ha un percorso predefinito, appartiene
+all'ingaggio e non all'installazione, e va tenuto **fuori dal repository**, uno per
+ingaggio. `GET /scope` riporta quante voci ci sono per ruolo, mai quali, e non ha un
+`POST`.
+
+**Senza file d'ingaggio il profilo `security-report` non fa nulla**, ed è un caso da
+conoscere: senza ruoli nessuna regola per ruolo può applicarsi, quindi il profilo
+equivale a `full` (maschera tutto). L'interfaccia lo dichiara; da riga di comando no.
+
+Codice, documentazione completa e formato dello scope:
+[`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
+
 ## A cosa NON serve
 
 - **Non è una garanzia di anonimizzazione.** Nessun modello di token classification lo
   è. Quattro tag restano sotto 0.5 di recall anche dopo il fine-tuning:
   `CREDITCARDNUMBER`, `IBAN`, `AMOUNT`, `ZIPCODE`.
 - **Non copre i tag cyber** (IP, hash, wallet, identificativi cloud, ASN, MAC). Restano
-  ai detector deterministici, che su di essi stanno a recall 0.911 con precision 0.989:
-  un modello dovrebbe battere quel campione per giustificare il costo. Nel dataset di
-  addestramento quei valori compaiono **senza etichetta**, di proposito — servono a
-  insegnare che una stringa tecnica è `O`.
+  ai detector deterministici di
+  [`rootedlab-code/rizzo-pii`](https://github.com/rootedlab-code/rizzo-pii/tree/dev)
+  (`src/app/detectors_cyber.py`), che su di essi stanno a recall 0.911 con precision
+  0.989: un modello dovrebbe battere quel campione per giustificare il costo. Nel
+  dataset di addestramento quei valori compaiono **senza etichetta**, di proposito —
+  servono a insegnare che una stringa tecnica è `O`.
+- **Non copre il tradecraft.** Nomi di strumenti, VPN, sandbox, procedure non sono PII e
+  nessun tag li prevede: un report anonimizzato racconta comunque *come* si lavora.
+- **Non sostituisce una rilettura umana.** Riduce di molto cosa resta da guardare; non
+  azzera. Un difetto trovato su un documento vero e non dall'holdout: il dominio del
+  committente è uscito in chiaro sette volte perché il suo TLD non era nella lista, e il
+  detector falliva **in silenzio** — mentre gli URL che contenevano lo stesso dominio
+  erano mascherati, cioè il documento sembrava protetto proprio dove non lo era.
 - **Non è validato fuori dall'italiano.** Il modello di partenza è multilingue, questo
   fine-tuning non ha rimisurato le altre sette lingue.
 
@@ -185,3 +271,12 @@ generazione sintetica e la rete regex+checksum. Copyright del progetto originale
 
 Fine-tuning sul genere sicurezza, dataset sintetico di dominio e valutazione:
 `rootedlab-code`.
+
+**Dove sta cosa** — i due repository non contengono le stesse cose, ed è il motivo per
+cui questa scheda linka entrambi:
+
+| | repository |
+|---|---|
+| checkpoint di partenza, tassonomia, pipeline sintetica, rete regex core | [`Rizzo-AI-Academy/rizzo-pii`](https://github.com/Rizzo-AI-Academy/rizzo-pii) |
+| **detector cyber, policy per ruolo, scope d'ingaggio** — ciò che serve per usare questo modello su report di sicurezza | [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev) |
+| corpus sintetico del genere sicurezza | [`dr3x1/rizzo-pii-security-it`](https://huggingface.co/datasets/dr3x1/rizzo-pii-security-it) |
