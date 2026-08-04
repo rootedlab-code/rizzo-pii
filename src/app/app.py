@@ -646,6 +646,36 @@ def config_post():
 # --------------------------------------------------------------------------- #
 # Policy di anonimizzazione (GET = leggi, POST = salva e applica SUBITO)
 # --------------------------------------------------------------------------- #
+def _requisiti_mancanti(profile):
+    """Cosa manca al profilo per fare quello che promette. Solo l'app puo' dirlo.
+
+    `policy.py` dichiara i requisiti come dato, ma non sa se un file d'ingaggio sia
+    caricato ne' quali pacchetti siano accesi: quelli li conosce solo qui."""
+    richiesto = policy.PROFILE_REQUIRES.get(profile) or {}
+    mancanti = []
+    assenti = [p for p in richiesto.get("packs", ()) if p not in ACTIVE_PACKS]
+    if assenti:
+        mancanti.append("packs")
+    if richiesto.get("scope") and SCOPE.is_empty():
+        mancanti.append("scope")
+    return mancanti
+
+
+def _accendi_pacchetti_del_profilo(profile):
+    """Accende i pacchetti che il profilo dichiara, senza spegnere gli altri.
+
+    L'insieme attivo e' l'UNIONE fra cio' che e' gia' acceso e cio' che il profilo
+    richiede: deterministico, e non scende mai sotto la configurazione con cui l'utente
+    ha lanciato l'app. La direzione dell'errore e' quella innocua — accendere 'cyber'
+    su un documento legale maschera di piu' (un numero di repertorio scambiato per un
+    IP), mentre non accenderlo lascerebbe in chiaro degli indicatori."""
+    richiesti = (policy.PROFILE_REQUIRES.get(profile) or {}).get("packs", ())
+    mancanti = [p for p in richiesti if p not in ACTIVE_PACKS]
+    if mancanti:
+        enable_packs(list(ACTIVE_PACKS) + mancanti)
+    return mancanti
+
+
 def _riscrivi_policy(profile, keep):
     """Salva e ricostruisce la policy dallo stato IN ESECUZIONE. Va chiamata col lock.
 
@@ -667,6 +697,16 @@ def policy_get():
     return jsonify({
         **POLICY.as_dict(),
         "profiles": {name: sorted(tags) for name, tags in policy.PROFILES.items()},
+        # Le regole per RUOLO di ogni profilo. Senza, 'security-report' e 'full' sono
+        # tipograficamente identici nella tendina — entrambi con l'elenco dei tag
+        # vuoto — e uno dei due promette qualcosa.
+        "profile_roles": {nome: {r: sorted(t) for r, t in sorted(ruoli.items())}
+                          for nome, ruoli in policy.PROFILE_ROLES.items()},
+        "requires": {nome: {"packs": list(req.get("packs", ())),
+                            "scope": bool(req.get("scope"))}
+                     for nome, req in policy.PROFILE_REQUIRES.items()},
+        "unmet": _requisiti_mancanti(POLICY.profile),
+        "packs": list(ACTIVE_PACKS),
         "known_tags": sorted(known_tags()),
         "high_risk_tags": sorted(policy.HIGH_RISK_TAGS),
         "policy_path": str(policy.policy_path()),
@@ -681,12 +721,18 @@ def policy_post():
     if profile not in policy.PROFILES:
         return jsonify({"error": f"Profilo sconosciuto: {profile}"}), 400
     with _CONFIG_LOCK:
+        # I pacchetti PRIMA della validazione dei tag: known_tags() legge
+        # ACTIVE_DETECTORS, e un profilo che ha bisogno di 'cyber' deve poter accettare
+        # i suoi tag nello stesso salvataggio in cui viene scelto.
+        accesi = _accendi_pacchetti_del_profilo(profile)
         keep = policy.parse_tags(data.get("keep_tags"))
         unknown = sorted(set(keep) - known_tags())
         if unknown:
             return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
         POLICY = _riscrivi_policy(profile, keep)
-    return jsonify({"ok": True, **POLICY.as_dict()})
+        mancanti = _requisiti_mancanti(profile)
+    return jsonify({"ok": True, **POLICY.as_dict(), "packs": list(ACTIVE_PACKS),
+                    "packs_enabled": accesi, "unmet": mancanti})
 
 
 @app.route("/detectors", methods=["GET"])

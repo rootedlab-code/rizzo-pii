@@ -185,6 +185,76 @@ class TestDetectorsEndpoint(EndpointTestCase):
         self.assertEqual(app.POLICY.profile, "clinical")
 
 
+class TestSecurityReportProfileIsHonest(EndpointTestCase):
+    """Il profilo o funziona, o dice perche' non puo'.
+
+    Con il pacchetto cyber spento le sue label non sono nella tassonomia, quindi
+    resolve_roles le scarta e keep_roles esce VUOTO: il profilo diventa un sinonimo
+    esatto di 'full', con un avviso che finisce in backend.log e che nessuno legge.
+    Era selezionabile cosi' nell'app rilasciata.
+
+    Il setUp della classe base accende cyber: qui si parte SPENTI di proposito, perche'
+    e' la configurazione dell'app impacchettata."""
+
+    def setUp(self):
+        super().setUp()
+        app.enable_packs([])
+        app.POLICY = policy.Policy()
+
+    def test_without_the_pack_the_profile_would_be_a_synonym_of_full(self):
+        # la regressione documentata: si prova che il difetto esisteva, cosi' se
+        # qualcuno rimuovesse l'attivazione automatica il test lo direbbe
+        vuoto = policy.resolve_roles("security-report", None, app.known_tags(),
+                                     warn=lambda _m: None)
+        self.assertEqual(vuoto, policy.resolve_roles("full", None, app.known_tags(),
+                                                     warn=lambda _m: None))
+
+    def test_selecting_the_profile_enables_the_pack_it_needs(self):
+        r = self.client.post("/policy", json={"profile": "security-report", "keep_tags": ""})
+
+        self.assertEqual(r.get_json()["packs_enabled"], ["cyber"])
+        self.assertIn("cyber", app.ACTIVE_PACKS)
+
+    def test_its_role_rules_survive_the_taxonomy_filter(self):
+        self.client.post("/policy", json={"profile": "security-report", "keep_tags": ""})
+
+        self.assertTrue(app.POLICY.keeps("IP", scope.ROLE_ADVERSARY))
+        # l'asimmetria che rende il profilo sicuro: cio' che e' del cliente, o di ruolo
+        # non determinato, resta mascherato
+        self.assertFalse(app.POLICY.keeps("IP", scope.ROLE_OWN))
+        self.assertFalse(app.POLICY.keeps("IP", scope.ROLE_UNKNOWN))
+
+    def test_the_response_says_the_scope_is_still_missing(self):
+        # l'unico requisito che l'app non puo' soddisfare da sola: senza un file
+        # d'ingaggio nessuna entita' ha un ruolo, quindi regole per ruolo non possono
+        # applicarsi a niente
+        r = self.client.post("/policy", json={"profile": "security-report", "keep_tags": ""})
+
+        self.assertIn("scope", r.get_json()["unmet"])
+
+    def test_a_profile_without_requirements_reports_nothing_unmet(self):
+        r = self.client.post("/policy", json={"profile": "clinical", "keep_tags": ""})
+
+        self.assertEqual(r.get_json()["unmet"], [])
+
+    def test_choosing_another_profile_afterwards_does_not_turn_the_pack_off(self):
+        # l'insieme attivo e' l'unione: un profilo accende cio' che gli serve e non
+        # spegne mai cio' che l'utente aveva scelto
+        self.client.post("/policy", json={"profile": "security-report", "keep_tags": ""})
+
+        self.client.post("/policy", json={"profile": "clinical", "keep_tags": ""})
+
+        self.assertIn("cyber", app.ACTIVE_PACKS)
+
+    def test_get_policy_exposes_the_role_rules_of_every_profile(self):
+        # senza, nella tendina 'security-report' e 'full' sono tipograficamente
+        # identici: entrambi con l'elenco dei tag vuoto
+        dati = self.client.get("/policy").get_json()
+
+        self.assertIn("IP", dati["profile_roles"]["security-report"][scope.ROLE_ADVERSARY])
+        self.assertEqual(dati["requires"]["security-report"]["packs"], ["cyber"])
+
+
 class TestPolicyEndpointKeepsRoles(EndpointTestCase):
 
     def test_saving_from_the_ui_does_not_erase_hand_written_keep_roles(self):

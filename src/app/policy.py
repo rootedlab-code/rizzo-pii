@@ -88,6 +88,22 @@ PROFILE_ROLES = {
     },
 }
 
+# Cosa serve a un profilo per fare quello che dice. Dichiarato come DATO, perche' un
+# profilo che promette e non mantiene e' peggio di un profilo assente.
+#
+# 'security-report' e' inerte per DUE cause indipendenti, e ne basta una: senza il
+# pacchetto 'cyber' le sue label non sono nella tassonomia e resolve_roles le scarta,
+# quindi keep_roles esce VUOTO — cioe' il profilo diventa un sinonimo esatto di 'full';
+# e senza un file di scope nessuna entita' ha un ruolo, quindi regole per ruolo non
+# possono applicarsi a nulla. La prima causa si puo' rimuovere da soli (basta accendere
+# il pacchetto); la seconda no, ed e' per questo che va DETTA all'utente.
+#
+# `packs` lo risolve chi accende i detector; `scope` lo puo' verificare solo l'app, che
+# e' l'unica a sapere se un file d'ingaggio e' caricato.
+PROFILE_REQUIRES = {
+    "security-report": {"packs": ("cyber",), "scope": True},
+}
+
 # Identificatori diretti: lasciarli in chiaro e' una scelta legittima ma pesante,
 # quindi la si segnala una volta al caricamento. Non e' un divieto.
 HIGH_RISK_TAGS = frozenset({
