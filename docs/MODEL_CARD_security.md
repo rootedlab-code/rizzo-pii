@@ -85,13 +85,55 @@ affiancati): **182 entità recuperate contro 20 perse**, p < 1e-6.
 Per tag, fra i 9 con almeno 100 entità nel gold: cinque migliorano in modo
 statisticamente distinguibile, quattro restano invariati, **nessuno peggiora**.
 
-| tag | entità recuperate |
-|---|--:|
-| `DATE` | +61 |
-| `ID_DOC` | +28 |
-| `CATASTO` | +18 |
-| `BUILDINGNUM` | +13 |
-| `CITY` | +12 |
+### Tabella completa, tag per tag
+
+Tutti e 22 i tag della tassonomia, misurati sullo stesso campione cieco, con lo stesso
+apparato, nello stesso momento. **Sistema completo** — modello + rete regex/checksum —
+perché è così che gira in produzione: misurare il solo modello direbbe quanto è bravo il
+modello, che non è il prodotto.
+
+La colonna che conta per chi scrive report è **«in chiaro»**: quante PII presenti nel
+documento **non** sono state mascherate. È il rischio, non il punteggio.
+
+| tag | entità | recall base | recall fork | Δ | in chiaro base → fork | affidabilità (fork) |
+|---|--:|--:|--:|--:|--:|---|
+| `FULLNAME` | 617 | 0.972 | **0.976** | **+0.004** | 17 → **15** | affidabile |
+| `CATASTO` | 165 | 0.309 | **0.400** | **+0.091** | 114 → **99** | **debole — rileggi a mano** |
+| `CITY` | 145 | 0.869 | **0.945** | **+0.076** | 19 → **8** | buono |
+| `ID_DOC` | 135 | 0.207 | **0.407** | **+0.200** | 107 → **80** | **debole — rileggi a mano** |
+| `EMAIL` | 123 | 1.000 | **1.000** | = | 0 → **0** | affidabile |
+| `DATE` | 122 | 0.385 | **0.885** | **+0.500** | 75 → **14** | buono |
+| `TELEPHONENUM` | 122 | 0.943 | **0.951** | **+0.008** | 7 → **6** | affidabile |
+| `STREET` | 106 | 0.962 | **0.962** | = | 4 → **4** | affidabile |
+| `BUILDINGNUM` | 102 | 0.676 | **0.794** | **+0.118** | 33 → **21** | buono |
+| `TIME` | 84 | 0.976 | **0.988** | **+0.012** | 2 → **1** | affidabile |
+| `PIVA` | 74 | 0.743 | **0.770** | **+0.027** | 19 → **17** | buono |
+| `CF` | 68 | 1.000 | **1.000** | = | 0 → **0** | affidabile |
+| `GENDER` | 64 | 0.953 | **0.953** | = | 3 → **3** | affidabile |
+| `PROVINCE` | 63 | 1.000 | **1.000** | = | 0 → **0** | affidabile |
+| `DOCID` | 55 | 0.109 | **0.327** | **+0.218** | 49 → **37** | **debole — rileggi a mano** |
+| `ZIPCODE` | 53 | 0.094 | **0.226** | **+0.132** | 48 → **41** | **debole — rileggi a mano** |
+| `AGE` | 45 | 0.600 | **0.600** | = | 18 → **18** | parziale |
+| `IBAN` | 42 | 0.357 | **0.357** | = | 27 → **27** | **debole — rileggi a mano** |
+| `CREDITCARDNUMBER` | 38 | 0.132 | **0.132** | = | 33 → **33** | **debole — rileggi a mano** |
+| `AMOUNT` | 28 | 0.107 | **0.500** | **+0.393** | 25 → **14** | **debole — rileggi a mano** |
+| `ORG` | 20 | 1.000 | **1.000** | = | 0 → **0** | affidabile |
+| `TARGA` | 8 | 1.000 | **1.000** | = | 0 → **0** | affidabile |
+| **TOTALE (micro)** | **2.279** | **0.737** | **0.808** | **+0.071** | **600 → 438** | — |
+
+**Zero tag peggiorano in recall.** Il totale delle PII lasciate in chiaro passa da 600 a
+**438 su 2.279**: 162 in meno, sullo stesso testo.
+
+**Ma sette tag restano a 0.5 o sotto**, e su quelli il sistema **non basta**:
+`CREDITCARDNUMBER` (0.132), `ZIPCODE` (0.226), `DOCID` (0.327), `IBAN` (0.357),
+`CATASTO` (0.400), `ID_DOC` (0.407), `AMOUNT` (0.500). Cinque dei sette migliorano
+rispetto al modello di partenza, ma migliorare non è bastare: se il tuo documento
+contiene carte di credito, coordinate catastali o numeri di repertorio, quelle righe
+vanno rilette a mano.
+
+Nota su `IBAN` e `CF`: nella tabella `CF` è a 1.000 e `IBAN` a 0.357 perché il primo ha
+un checksum verificabile e il secondo, nel gold, compare spesso in forme che la rete non
+convalida. Dove il checksum passa, la rete è esatta e vince sul modello.
 
 > **Una versione precedente di questa scheda riportava 0.806 → 0.858.** Quei numeri
 > venivano da un apparato di valutazione che ricostruiva il testo unendo i token
@@ -209,11 +251,37 @@ equivale a `full` (maschera tutto). L'interfaccia lo dichiara; da riga di comand
 Codice, documentazione completa e formato dello scope:
 [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
 
+### Quattro difetti trovati usandolo su un documento vero, e risolti
+
+Il modello aveva superato un test cieco da 1.000 righe con tutte le regole. Poi è stato
+usato su un **verbale d'assessment reale**, e in una sola esecuzione sono emersi quattro
+difetti che nessun holdout aveva mostrato. Sono la ragione per cui questa scheda insiste
+sulla rilettura: **un test superato non è un collaudo sul campo.**
+
+| difetto | causa | stato |
+|---|---|---|
+| 9 orari su 9 lasciati in chiaro | la validation ha orari nei formati che il modello gestisce; i verbali usano orari **tondi** (`08:00`, `14:00`) | ✅ detector `TIME` |
+| il dominio del committente in chiaro **7 volte** | il suo TLD non era fra i 119 della lista, e il detector falliva **in silenzio** | ✅ ciò che l'analista dichiara nello scope viene rilevato comunque |
+| gli URL con lo **stesso** dominio erano invece mascherati | due percorsi diversi per lo stesso valore: il documento sembrava protetto proprio dove non lo era | ✅ coerenti |
+| il 46% degli errori residui era un CAP | nessun detector `ZIPCODE` | ✅ detector `ZIPCODE` |
+
+Riverificati sul checkpoint pubblicato con un documento costruito apposta: orari tondi,
+un dominio con TLD fuori lista dichiarato `own`, la sua URL e un CAP. Tutti e quattro
+mascherati.
+
+**E una lezione che è diventata una funzione:** una lista chiusa deve dire quando *non
+sa*. Se il testo contiene token a forma di dominio con estensioni fuori lista,
+l'interfaccia lo segnala esplicitamente — perché in quel caso il documento può sembrare
+lavorato e non esserlo.
+
 ## A cosa NON serve
 
 - **Non è una garanzia di anonimizzazione.** Nessun modello di token classification lo
-  è. Quattro tag restano sotto 0.5 di recall anche dopo il fine-tuning:
-  `CREDITCARDNUMBER`, `IBAN`, `AMOUNT`, `ZIPCODE`.
+  è. **Sette** tag restano a 0.5 di recall o sotto anche dopo il fine-tuning —
+  `CREDITCARDNUMBER`, `ZIPCODE`, `DOCID`, `IBAN`, `CATASTO`, `ID_DOC`, `AMOUNT` — e su
+  quelli serve una rilettura umana. *(Una stesura precedente di questa scheda ne
+  dichiarava quattro: era un elenco scritto a mano, non ricavato dalla tabella. Quella
+  qui sopra viene dalla misura.)*
 - **Non copre i tag cyber** (IP, hash, wallet, identificativi cloud, ASN, MAC). Restano
   ai detector deterministici di
   [`rootedlab-code/rizzo-pii`](https://github.com/rootedlab-code/rizzo-pii/tree/dev)
