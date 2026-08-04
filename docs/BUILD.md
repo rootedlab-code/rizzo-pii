@@ -69,11 +69,23 @@ sudo apt update && sudo apt install -y \
   libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev
 # + Rust (https://rustup.rs) e Node.js 18+
 
-# copia il modello addestrato sulla macchina Linux in models/rizzo-pii-0.3B-v1.2.0/
+# il modello: scaricalo (o copialo) in models/rizzo-pii-0.3B-security/
+hf download dr3x1/rizzo-pii-0.3B-security --local-dir models/rizzo-pii-0.3B-security
 bash build_linux.sh
 ```
 Output: `tauri/src-tauri/target/release/bundle/{deb/*.deb, appimage/*.AppImage}`. Il modello è
-gitignorato (~1,23 GB): va copiato a mano sulla macchina Linux, non è nel repo.
+gitignorato (~1,23 GB): va portato a mano sulla macchina Linux, non è nel repo.
+
+**Quale modello finisce nel pacchetto** lo decide `PII_BUILD_MODEL`, letta dagli spec e
+dai due script di build. Default: `models/rizzo-pii-0.3B-security`, il checkpoint che ha
+superato il criterio di `docs/CRITERIO.md`. Per impacchettarne un altro:
+
+```bash
+PII_BUILD_MODEL=models/rizzo-pii-0.3B-base bash build_linux.sh
+```
+
+Se la directory indicata non contiene un `config.json`, il build si ferma subito invece
+di produrre un pacchetto da 1,8 GB con dentro una cartella vuota.
 
 ### Con Docker (consigliato: riproducibile, non sporca il sistema)
 
@@ -102,8 +114,9 @@ docker run --rm -e VENV=/opt/venv -e APPIMAGE_EXTRACT_AND_RUN=1 \
 ## Componenti
 - `src/app/desktop_app.py` — entry point: avvia il server locale e apre il browser.
 - `src/app/app.py` — logica (modello + chunking); `MODEL_DIR` si risolve anche dentro l'exe.
-- `build.spec` (root) — configurazione PyInstaller. Impacchetta `models/rizzo-pii-0.3B-v1.2.0` come
-  `pii_model` dentro l'exe; esclude TF/CUDA/ecc. Entry: `src/app/desktop_app.py`, `pathex=src/app`.
+- `build.spec` (root) — configurazione PyInstaller. Impacchetta come `pii_model` dentro l'exe il
+  modello indicato da `PII_BUILD_MODEL` (default `models/rizzo-pii-0.3B-security`); esclude
+  TF/CUDA/ecc. Entry: `src/app/desktop_app.py`, `pathex=src/app`.
 - `installer.iss` — script Inno Setup per l'installer `.exe`.
 - `build_env\` — virtualenv CPU dedicato (NON il Python di sistema, che ha torch CUDA).
 

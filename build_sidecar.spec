@@ -13,8 +13,17 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
     binaries += b
     hiddenimports += h
 
-# modello + asset grafici impacchettati (app.py li risolve via _resource_path / _MEIPASS)
-datas += [("models/rizzo-pii-0.3B-v1.2.0", "pii_model")]
+# Modello + asset grafici impacchettati (app.py li risolve via _resource_path/_MEIPASS).
+# Stessa sorgente di build.spec e degli script di build: vedi il commento la'.
+# Override: PII_BUILD_MODEL=models/altro-checkpoint pyinstaller build_sidecar.spec
+import os
+from pathlib import Path
+
+MODEL = os.environ.get("PII_BUILD_MODEL", "models/rizzo-pii-0.3B-security")
+if not (Path(MODEL) / "config.json").is_file():
+    raise SystemExit(f"ERRORE: {MODEL} non e' un checkpoint (manca config.json). "
+                     f"Scaricalo o indica PII_BUILD_MODEL.")
+datas += [(MODEL, "pii_model")]
 datas += [("src/app/assets", "assets")]
 hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
 

@@ -10,10 +10,19 @@ for pkg in ("transformers", "tokenizers", "safetensors", "huggingface_hub", "reg
     binaries += b
     hiddenimports += h
 
-# il modello addestrato va incluso nel pacchetto (sorgente: models/rizzo-pii-0.3B,
-# destinazione dentro l'exe: "pii_model" -> app.py lo risolve via _resource_path).
-# Finche' rizzo-pii-0.3B non e' stato addestrato si puo' usare models/pii_model_legacy.
-datas += [("models/rizzo-pii-0.3B-v1.2.0", "pii_model")]
+# Il modello impacchettato. Destinazione dentro l'exe: "pii_model", che app.py risolve
+# via _resource_path. Sorgente in UN SOLO POSTO, condiviso con build_sidecar.spec e con
+# i due script di build: erano quattro path scritti a mano, tenuti allineati da un
+# commento, e infatti puntavano tutti a una directory che non esiste piu'.
+# Override: PII_BUILD_MODEL=models/altro-checkpoint pyinstaller build.spec
+import os
+from pathlib import Path
+
+MODEL = os.environ.get("PII_BUILD_MODEL", "models/rizzo-pii-0.3B-security")
+if not (Path(MODEL) / "config.json").is_file():
+    raise SystemExit(f"ERRORE: {MODEL} non e' un checkpoint (manca config.json). "
+                     f"Scaricalo o indica PII_BUILD_MODEL.")
+datas += [(MODEL, "pii_model")]
 datas += [("src/app/assets", "assets")]   # mascotte/icone -> app.py le serve da _resource_path("assets")
 hiddenimports += ["fitz", "flask", "sklearn.utils._typedefs"]
 
