@@ -3,11 +3,19 @@
 Entry point dell'app desktop (PyInstaller). Avvia il server Flask in locale e
 apre il browser. Chiudere questa finestra termina l'applicazione.
 
-Configurazione host/porta:
-  1) CLI args (--host / --port)   ->  precedenza massima
-  2) env PII_HOST / PII_PORT
-  3) config.json  (vedi server_config.py)
-  4) default 127.0.0.1:5005
+Configurazione host/porta, in ordine di precedenza:
+  1) env PII_HOST / PII_PORT
+  2) config.json  (vedi server_config.py)
+  3) default 127.0.0.1:5005
+
+**Nessun argomento da riga di comando**: qui non c'e' argparse e `resolve()` viene
+chiamata senza parametri. La stesura precedente prometteva `--host/--port` perche'
+descriveva la catena di `server_config` invece del proprio comportamento — chi li
+passava non otteneva un errore, otteneva che venivano ignorati in silenzio.
+Per gli argomenti veri: `python src/app/app.py --host ... --port ...`.
+
+Il resto della configurazione (detector, ingaggio, modello) lo risolve `app` al proprio
+import, da env e dai file in `config_dir()`.
 """
 
 import multiprocessing

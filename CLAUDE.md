@@ -82,6 +82,11 @@ modelli in `models/<versione>/`, artefatti dei run in `experiments/<run>/`, doc 
   risponde `identified: false` invece di indovinare un nome. Modulo puro (stdlib) → importabile
   da uno spec PyInstaller e testabile senza torch.
 - `server_config.py` — **configurazione host/porta** condivisa tra tutti gli entry point e con Tauri.
+  Da qui passa anche il **puntatore all'ingaggio** (`engagement.json`, `saved_scope_file()`): contiene
+  un percorso, mai dei valori, e il lato Python lo **legge soltanto** — lo scriverà il dialogo nativo
+  di Tauri. Codici di uscita: **76** porta occupata, **78** configurazione non utilizzabile (p.es.
+  file d'ingaggio rotto); Tauri traduce qualunque altro codice in «il backend si è chiuso
+  inaspettatamente».
   Ospita anche `resolve_model_dir()`: **PII_MODEL_DIR > modello impacchettato > albero di sviluppo**.
   L'ordine conta ed è una correzione: prima il ramo `sys._MEIPASS` veniva per primo, e dentro un
   pacchetto quella variabile esiste sempre → l'override era **codice morto**. Un override rotto non

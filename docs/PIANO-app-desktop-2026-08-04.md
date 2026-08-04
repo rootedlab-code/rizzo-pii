@@ -1,6 +1,6 @@
 # Piano — rendere usabili dall'app desktop le capacità di sicurezza
 
-**Stato: APPROVATO. Fasi 0, 1 e 2 FATTE il 2026-08-04.** Fasi 3-4 da fare.
+**Stato: APPROVATO. Fasi 0-3 FATTE il 2026-08-04.** Resta la fase 4 (richiede Rust).
 Redatto il 2026-08-04 da tre analisi indipendenti in contesto separato, con le
 affermazioni decisive **riverificate a mano** (§8).
 
@@ -9,10 +9,10 @@ affermazioni decisive **riverificate a mano** (§8).
 | 0 — sbloccare il build | ✅ fatta | `c8f712b`, `72885c9`, `76bac96` |
 | 1 — il modello giusto nel pacchetto | ✅ fatta | `da0a098` |
 | 2 — detector accendibili, profilo onesto | ✅ fatta | `0efb285`, `3ab9c4c`, `ed613d9`, `00b7aac`, `8f26cbe`, `8d7307e` |
-| 3 — cablaggio della configurazione | da fare | — |
+| 3 — cablaggio della configurazione | ✅ fatta | `4d54c49`, `4b1c79b` |
 | 4 — scope dall'app (richiede Rust) | da fare | — |
 
-Difetti chiusi: **D1** (`PII_MODEL_DIR` codice morto), **D2** (build rotto), **D3** (`security-report` placebo) e **D5** (`enable_packs` silenzioso sui nomi ignoti).
+Difetti chiusi: **D1** (`PII_MODEL_DIR` codice morto), **D2** (build rotto), **D3** (`security-report` placebo), **D4** (`load_config` senza guardia), **D5** (`enable_packs` silenzioso), **D6** (uscita generica su scope rotto) e **D7** (docstring che promettono CLI inesistenti).
 Difetto trovato durante il lavoro e **non** risolto: **D9** — la suite ha una
 dipendenza dall'ordine preesistente (`test_generate_cyber_pii::test_registering_does_not_break_the_upstream_slots`
 fallisce se i test girano in ordine inverso). Verificato preesistente escludendo i

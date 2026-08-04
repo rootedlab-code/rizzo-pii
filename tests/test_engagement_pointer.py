@@ -145,10 +145,26 @@ class TestEntryPointDelSidecar(unittest.TestCase):
     def setUp(self):
         self.sorgente = (ROOT / "src" / "app" / "serve.py").read_text("utf-8")
 
+    def usa_argparse(self, testo):
+        """Se il modulo USA argparse, non se lo nomina.
+
+        La prima stesura di questo controllo cercava la parola 'argparse' ovunque, e
+        diventava rossa per la docstring che dice *non c'e' argparse*. Un test che non
+        distingue il codice dalla prosa che lo descrive misura la prosa."""
+        return "import argparse" in testo or "argparse.ArgumentParser" in testo
+
     def test_it_does_not_promise_command_line_arguments(self):
         # non ha argparse, e Tauri non passa mai argv (lib.rs, spawn_sidecar)
-        self.assertNotIn("argparse", self.sorgente)
-        self.assertNotIn("--host / --port", self.sorgente)
+        self.assertFalse(self.usa_argparse(self.sorgente))
+        self.assertNotIn("1) CLI args", self.sorgente)
+
+    def test_the_browser_entry_point_does_not_promise_them_either(self):
+        # stesso difetto, stesso file di documentazione: chi passava --port non
+        # otteneva un errore, otteneva che veniva ignorato in silenzio
+        altro = (ROOT / "src" / "app" / "desktop_app.py").read_text("utf-8")
+
+        self.assertFalse(self.usa_argparse(altro))
+        self.assertNotIn("1) CLI args", altro)
 
     def test_the_log_goes_where_the_configuration_lives(self):
         # prima usava LOCALAPPDATA anche fuori da Windows, dove non esiste: il log
