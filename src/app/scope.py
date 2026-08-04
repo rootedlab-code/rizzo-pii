@@ -69,6 +69,7 @@ from collections import namedtuple
 from pathlib import Path
 
 import detectors_cyber
+import server_config
 
 # Ruoli assegnabili da file.
 ROLE_OWN = "own"
@@ -343,12 +344,19 @@ class Scope:
 # Caricamento da file
 # --------------------------------------------------------------------------- #
 def scope_path(cli_path=None):
-    """Percorso del file di scope: CLI > env. None = nessuno scope configurato.
+    """Percorso del file di scope: CLI > env > puntatore. None = nessuno configurato.
 
     Non c'e' un percorso di default: il file appartiene all'ingaggio, non
-    all'installazione, e trovarne uno per caso sarebbe il modo peggiore di
-    scoprire che esiste."""
-    raw = cli_path or os.environ.get(ENV_SCOPE_FILE)
+    all'installazione, e trovarne uno per caso sarebbe il modo peggiore di scoprire che
+    esiste. Il **puntatore** (`engagement.json`) non e' un default: e' una scelta che
+    l'utente ha fatto e che sopravvive al riavvio, senza la quale l'app desktop non
+    avrebbe modo di ricordare l'ingaggio su cui sta lavorando.
+
+    Contiene un percorso, mai dei valori, e il lato Python lo legge soltanto: lo scrive
+    il dialogo nativo del sistema operativo. Un `POST /scope` renderebbe l'endpoint un
+    oracolo di lettura del filesystem, e i messaggi di ScopeError citano un valore preso
+    dal file."""
+    raw = cli_path or os.environ.get(ENV_SCOPE_FILE) or server_config.saved_scope_file()
     return Path(raw).expanduser() if raw else None
 
 

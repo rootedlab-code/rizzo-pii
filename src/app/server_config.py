@@ -27,9 +27,20 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5005
 EXIT_PORT_CONFLICT = 76  # riconosciuto da Tauri (lib.rs) come "porta occupata"
+# EX_CONFIG di sysexits.h: "la configurazione indicata non e' utilizzabile". Distinto
+# dal 76 perche' la cura e' diversa - li' si cambia porta, qui si cambia un file - e
+# perche' oggi uno scope rotto esce con 1, che Tauri traduce in "il backend si e' chiuso
+# inaspettatamente": un messaggio che non aiuta a capire quale file rileggere.
+EXIT_BAD_CONFIG = 78
 
 # Nome con cui il modello viene impacchettato dentro l'eseguibile (vedi build.spec).
 BUNDLED_MODEL_NAME = "pii_model"
+
+# Puntatore all'ingaggio in corso: contiene un PERCORSO, mai dei valori. Sta in un file
+# suo e non in config.json perche' quest'ultimo e' riscritto per intero da Tauri e da
+# POST /config, che cancellerebbero la chiave. E non si chiama scope.json di proposito:
+# nessuno deve poter credere che basti copiarci dentro il file d'ingaggio.
+ENGAGEMENT_FILENAME = "engagement.json"
 
 
 def config_dir() -> Path:
@@ -48,11 +59,18 @@ def config_path() -> Path:
 
 
 def load_config() -> dict:
-    """Legge config.json; ritorna {} se mancante o corrotto."""
+    """Legge config.json; ritorna {} se mancante, corrotto o non un oggetto.
+
+    La guardia `isinstance(dict)` non e' pedanteria: `[1, 2]` e' JSON valido, quindi
+    senza di essa `resolve()` chiamerebbe `.get()` su una lista e il sidecar morirebbe
+    prima che Flask apra la porta — con l'app desktop che mostra solo "il backend si e'
+    chiuso inaspettatamente". `policy.load_file()` la guardia ce l'aveva gia'."""
     p = config_path()
     if p.exists():
         try:
-            return json.loads(p.read_text("utf-8"))
+            data = json.loads(p.read_text("utf-8"))
+            if isinstance(data, dict):
+                return data
         except (json.JSONDecodeError, OSError):
             pass
     return {}
@@ -76,6 +94,34 @@ def resolve(cli_host=None, cli_port=None):
     host = cli_host or os.environ.get("PII_HOST") or cfg.get("host") or DEFAULT_HOST
     port = cli_port or os.environ.get("PII_PORT") or cfg.get("port") or DEFAULT_PORT
     return str(host), int(port)
+
+
+def engagement_path() -> Path:
+    return config_dir() / ENGAGEMENT_FILENAME
+
+
+def saved_scope_file():
+    """Il percorso del file d'ingaggio salvato, o None.
+
+    **Il lato Python legge e basta**: qui non esiste, e non deve esistere, una funzione
+    che scriva questo file. Lo scrive il dialogo nativo del sistema operativo (fase 4),
+    mai una form web — `GET /scope` non ha un POST proprio perche' quel file contiene
+    gli IP del cliente e gli indicatori dell'avversario.
+
+    Un puntatore ASSENTE significa "nessun ingaggio configurato", che e' il
+    comportamento storico. Un puntatore presente ma illeggibile e' un'altra cosa e la
+    decide chi chiama: qui si ritorna comunque None, e `scope.py` alza ScopeError."""
+    p = engagement_path()
+    if not p.is_file():
+        return None
+    try:
+        dati = json.loads(p.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(dati, dict):
+        return None
+    valore = dati.get("scope_file")
+    return str(valore) if valore else None
 
 
 def _is_model_dir(path) -> bool:
