@@ -381,7 +381,8 @@ def _fuse_adjacent(kept, text):
     Il modello frammenta: 'Giulia Moretti' esce come due FULLNAME adiacenti e
     l'utente si ritrova `[FULLNAME_1] [FULLNAME_2]`, che per un LLM a valle sono due
     persone diverse — cioe' proprio l'analizzabilita' che il tool deve preservare.
-    Misurato su 2.000 righe: FULLNAME spezzato nel 9,9% dei casi.
+    Misurato con src/training/fragmentation.py su 1.000 righe: FULLNAME spezzato
+    nell'1,8% dei casi dal modello di sicurezza, nello 0,3% da quello di partenza.
 
     Il difetto restava invisibile perche' `normalize_entities()` in valutazione FONDE
     gia' (deve: nel gold 'Mario'/'Rossi' sono GIVENNAME+SURNAME separati). Il numero

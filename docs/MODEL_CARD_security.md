@@ -79,11 +79,36 @@ Sul genere sicurezza il recall passa da 0.893 a **0.939**, e `DATE` da 0.090 a
 sono stati toccati dalla correzione.
 
 > **I numeri valgono per il sistema con la fusione degli span adiacenti** (`_fuse_adjacent`
-> in `app.py`, dal 2026-08-03). Senza, questo modello spezza `FULLNAME` nel **9,9%** dei
-> casi contro lo **0,3%** del checkpoint di partenza, e i nomi escono come due
-> segnaposto invece di uno: su quel singolo asse il modello di partenza e' migliore.
-> La misura non lo mostrava perche' l'attrezzatura di valutazione fondeva gia' mentre
-> l'app no.
+> in `app.py`, dal 2026-08-03). Senza la fusione i frammenti arrivano all'utente come
+> segnaposto distinti — `[FULLNAME_1] [FULLNAME_2]` sono due persone diverse per l'LLM
+> a valle — e su quell'asse **questo modello e' peggiore del checkpoint di partenza**:
+>
+> | frammentazione (senza fusione) | `rizzo-pii-0.3B` | questo modello |
+> |---|--:|--:|
+> | `FULLNAME` | **0,3%** | **1,8%** |
+> | tutti i tag (micro) | **11,5%** | **13,7%** |
+>
+> Il fine-tuning recupera entita' che il checkpoint di partenza non trovava affatto, ma
+> quelle che trova le emette spezzate un po' piu' spesso. La fusione lo ripara a livello
+> di prodotto; senza, il documento anonimizzato e' meno leggibile a valle.
+>
+> Riproducibile — 1.000 righe, rete regex core, gli stessi due file di predizioni:
+>
+> ```bash
+> python src/training/predict_entities.py dataset/validation/test_riserva_legale.jsonl \
+>     --out /tmp/pred.jsonl --model <checkpoint>
+> python src/training/fragmentation.py dataset/validation/test_riserva_legale.jsonl \
+>     --pred /tmp/pred.jsonl
+> ```
+>
+> **Una misura precedente riportava 9,9% contro 0,3%.** Veniva dallo stesso apparato
+> difettoso di cui sopra e non era riproducibile da nessun comando: era stata calcolata
+> una volta sola, a mano. Il valore del checkpoint di partenza si e' confermato, quello
+> di questo modello no.
+>
+> Perche' la misura non lo mostrava: l'attrezzatura di valutazione fonde gli span
+> adiacenti mentre l'app non lo faceva, quindi le due davano risposte diverse alla
+> stessa domanda — e rispondeva quella della misura.
 >
 > I numeri qui sopra **non sono confrontabili** con il micro-F1 dichiarato dal modello
 > di partenza: quello è misurato sulla sua validation con il suo apparato, questo su un

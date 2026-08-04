@@ -93,10 +93,19 @@ Ognuna di queste è nata da un numero sbagliato realmente prodotto, non da un ti
   tag (deve: nel gold 'Mario'/'Rossi' sono `GIVENNAME`+`SURNAME` separati). `_merge()`
   nell'app non lo faceva. Risultato: `FULLNAME` sul test congelato risultava **2446 →
   2454, un miglioramento**, mentre il prodotto emetteva `[FULLNAME_1] [FULLNAME_2]` —
-  che per un LLM a valle sono due persone diverse. Misurato: il fine-tuning spezza
-  `FULLNAME` nel **9,9%** dei casi contro lo **0,3%** del checkpoint di partenza.
+  che per un LLM a valle sono due persone diverse. Misurato con
+  `src/training/fragmentation.py` sulla riserva (1.000 righe, rete core): il
+  fine-tuning spezza `FULLNAME` nell'**1,8%** dei casi contro lo **0,3%** del
+  checkpoint di partenza, e su tutti i tag **13,7%** contro **11,5%**.
   Il difetto era invisibile perché la misura e l'app avevano due semantiche diverse
   per la stessa operazione, e la misura era quella che rispondeva.
+
+  **Coda del gemello, 2026-08-04: il numero della toppa era a sua volta un gemello.**
+  Le prime cifre pubblicate — 9,9% contro 0,3% — venivano dall'apparato rotto di #23 e
+  da un conteggio a mano, mai scriptato. Quella del checkpoint di partenza ha retto,
+  quella del fine-tuning era sbagliata di cinque volte. Una misura che corregge un
+  difetto di misura va scritta come codice con dei test, altrimenti eredita il
+  problema che sta risolvendo.
 
   Nota su cosa NON si fonde: gli span **validati**. Un IP o un CF sono completi per
   costruzione, quindi due accanto sono due entità — fonderli maschererebbe
