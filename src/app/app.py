@@ -24,6 +24,7 @@ Configurazione host/porta (precedenza): CLI --host/--port > env PII_HOST/PII_POR
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -198,6 +199,12 @@ DETECTORS = [
 # Ogni pacchetto porta i propri detector e la propria KEEPLIST (riferimenti pubblici
 # da non mascherare mai).
 # --------------------------------------------------------------------------- #
+# Serializza i soli SCRITTORI (POST /policy e POST /detectors). Non i lettori: due
+# POST concorrenti potrebbero interlacciare enable_packs e la ricostruzione della
+# policy, lasciandola risolta contro la tassonomia dell'altra richiesta - cioe'
+# rompendo proprio l'invariante che l'ordine obbligato serve a garantire.
+_CONFIG_LOCK = threading.Lock()
+
 DETECTOR_PACKS = {
     "cyber": (detectors_cyber.DETECTORS, detectors_cyber.KEEP_PATTERNS),
 }
@@ -639,6 +646,22 @@ def config_post():
 # --------------------------------------------------------------------------- #
 # Policy di anonimizzazione (GET = leggi, POST = salva e applica SUBITO)
 # --------------------------------------------------------------------------- #
+def _riscrivi_policy(profile, keep):
+    """Salva e ricostruisce la policy dallo stato IN ESECUZIONE. Va chiamata col lock.
+
+    Non usa `load_policy()` di proposito: quella rilegge la catena env > file >
+    default, quindi resusciterebbe un PII_KEEP_TAGS che l'utente ha appena svuotato dal
+    modale, e cancellerebbe una policy impostata da riga di comando.
+
+    Le chiavi che l'interfaccia non espone — `keep_roles`, `detectors` — si rileggono e
+    si riscrivono tali e quali: salvare dal modale non deve cancellare regole per ruolo
+    scritte a mano, ne' spegnere i detector al prossimo avvio."""
+    cfg = policy.load_file()
+    policy.save_file(profile, keep, cfg.get("keep_roles"), detectors=list(ACTIVE_PACKS))
+    roles = policy.resolve_roles(profile, cfg.get("keep_roles"), known_tags())
+    return policy.Policy(keep_tags=keep, profile=profile, keep_roles=roles)
+
+
 @app.route("/policy", methods=["GET"])
 def policy_get():
     return jsonify({
@@ -657,21 +680,60 @@ def policy_post():
     profile = str(data.get("profile", policy.DEFAULT_PROFILE)).strip().lower()
     if profile not in policy.PROFILES:
         return jsonify({"error": f"Profilo sconosciuto: {profile}"}), 400
-    keep = policy.parse_tags(data.get("keep_tags"))
-    unknown = sorted(set(keep) - known_tags())
-    if unknown:
-        return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
-
-    # keep_roles non e' modificabile da qui (l'UI non lo espone): va riletto e
-    # riscritto tale e quale, altrimenti salvare dal modale cancellerebbe le regole
-    # per ruolo scritte a mano in policy.json.
-    cfg_roles = policy.load_file().get("keep_roles")
-    policy.save_file(profile, keep, cfg_roles)
-    # a differenza di host/porta, la policy non richiede un riavvio: si applica alla
-    # prossima analisi.
-    roles = policy.resolve_roles(profile, cfg_roles, known_tags())
-    POLICY = policy.Policy(keep_tags=keep, profile=profile, keep_roles=roles)
+    with _CONFIG_LOCK:
+        keep = policy.parse_tags(data.get("keep_tags"))
+        unknown = sorted(set(keep) - known_tags())
+        if unknown:
+            return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
+        POLICY = _riscrivi_policy(profile, keep)
     return jsonify({"ok": True, **POLICY.as_dict()})
+
+
+@app.route("/detectors", methods=["GET"])
+def detectors_get():
+    return jsonify({
+        "packs": list(ACTIVE_PACKS),
+        "available": sorted(DETECTOR_PACKS),
+        "pack_tags": {nome: sorted({d[0] for d in det})
+                      for nome, (det, _keep) in DETECTOR_PACKS.items()},
+        "known_tags": sorted(known_tags()),
+        "policy": POLICY.as_dict(),
+    })
+
+
+@app.route("/detectors", methods=["POST"])
+def detectors_post():
+    """Accende o spegne i pacchetti, e rimette in riga la policy.
+
+    **L'ordine non e' negoziabile**: valida -> accendi -> rileggi la tassonomia ->
+    ricostruisci la policy. `known_tags()` legge ACTIVE_DETECTORS, quindi chiedere la
+    tassonomia prima di accendere restituirebbe quella vecchia e un `keep_tags: IP`
+    verrebbe buttato via come tag inesistente. E' lo stesso vincolo che il blocco
+    __main__ documenta per il ramo da riga di comando.
+
+    La validazione sta QUI e non dentro enable_packs, che si limita a un avviso: per
+    una CLI e' ragionevole proseguire, per un'API no. E un nome sbagliato sbaglia
+    nella direzione pericolosa — senza il pacchetto, gli IP restano in chiaro perche'
+    nessuno li cerca."""
+    global POLICY
+    data = request.get_json(silent=True) or {}
+    nomi = parse_packs(data.get("packs"))
+    ignoti = sorted(set(nomi) - set(DETECTOR_PACKS))
+    if ignoti:
+        return jsonify({"error": f"Pacchetti non riconosciuti: {', '.join(ignoti)} "
+                                 f"(disponibili: {', '.join(sorted(DETECTOR_PACKS))})"}), 400
+
+    with _CONFIG_LOCK:
+        enable_packs(nomi)
+        tags = known_tags()
+        # Spegnendo un pacchetto le sue label escono dalla tassonomia: i tag che la
+        # policy teneva in chiaro grazie a quel pacchetto vanno tolti, altrimenti il
+        # modale si ritrova un valore che lui stesso rifiuterebbe al salvataggio.
+        caduti = sorted(t for t in POLICY.keep_tags if t not in tags)
+        POLICY = _riscrivi_policy(POLICY.profile,
+                                 [t for t in sorted(POLICY.keep_tags) if t in tags])
+    return jsonify({"ok": True, "packs": list(ACTIVE_PACKS), "dropped_tags": caduti,
+                    "known_tags": sorted(tags), "policy": POLICY.as_dict()})
 
 
 @app.route("/scope", methods=["GET"])
