@@ -201,9 +201,11 @@ DETECTORS = [
 DETECTOR_PACKS = {
     "cyber": (detectors_cyber.DETECTORS, detectors_cyber.KEEP_PATTERNS),
 }
-ACTIVE_DETECTORS = list(DETECTORS)
-ACTIVE_KEEP = []
-ACTIVE_PACKS = []
+# Tuple, non liste: sono lette da richieste concorrenti (Flask gira threaded=True) e
+# un lettore non deve mai poter osservare uno stato a meta'. Vedi enable_packs().
+ACTIVE_DETECTORS = tuple(DETECTORS)
+ACTIVE_KEEP = ()
+ACTIVE_PACKS = ()
 
 
 def parse_packs(raw):
@@ -215,19 +217,30 @@ def parse_packs(raw):
 
 
 def enable_packs(names):
-    """Ricompone i detector attivi = core + pacchetti richiesti. Ritorna quelli attivati."""
+    """Ricompone i detector attivi = core + pacchetti richiesti. Ritorna quelli attivati.
+
+    **Si costruisce fuori e si pubblica una volta sola.** La stesura precedente
+    assegnava le globali e POI le estendeva con `+=`, che su una lista modifica
+    l'oggetto gia' visibile: un lettore concorrente — `detect_regex` durante un
+    `/analyze` — poteva iterare una lista che cresceva sotto di lui e ottenere mezzo
+    pacchetto, senza alcun errore. Con le tuple non esiste uno stato intermedio
+    osservabile: chi ha gia' preso la globale lavora su una fotografia immutabile,
+    chi la prende dopo vede quella nuova, e non c'e' un "durante".
+
+    Finche' l'unico chiamante era l'import questo non poteva accadere. Diventa
+    raggiungibile ora che i pacchetti si accendono da un endpoint."""
     global ACTIVE_DETECTORS, ACTIVE_KEEP, ACTIVE_PACKS
     unknown = [n for n in names if n not in DETECTOR_PACKS]
     if unknown:
         print(f"ATTENZIONE: pacchetti di detector sconosciuti, ignorati: {', '.join(unknown)} "
               f"(disponibili: {', '.join(sorted(DETECTOR_PACKS))})")
     active = [n for n in names if n in DETECTOR_PACKS]
-    ACTIVE_DETECTORS, ACTIVE_KEEP = list(DETECTORS), []
+    detectors, keep = list(DETECTORS), []
     for name in active:
         pack_detectors, pack_keep = DETECTOR_PACKS[name]
-        ACTIVE_DETECTORS += pack_detectors
-        ACTIVE_KEEP += pack_keep
-    ACTIVE_PACKS = active
+        detectors += pack_detectors
+        keep += pack_keep
+    ACTIVE_DETECTORS, ACTIVE_KEEP, ACTIVE_PACKS = tuple(detectors), tuple(keep), tuple(active)
     return active
 
 

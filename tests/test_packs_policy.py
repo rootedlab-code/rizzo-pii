@@ -69,6 +69,50 @@ class PackPolicyTestCase(unittest.TestCase):
         app.POLICY = self._policy
 
 
+class TestPubblicazioneAtomica(PackPolicyTestCase):
+    """I detector attivi si pubblicano in un colpo solo, e sono immutabili.
+
+    La stesura precedente assegnava le globali e poi le estendeva con `+=`, che su una
+    lista modifica l'oggetto gia' visibile: con Flask in threaded=True un lettore
+    concorrente poteva iterare una lista che cresceva sotto di lui e vedere mezzo
+    pacchetto, senza alcun errore.
+
+    Si asserisce la PROPRIETA' (immutabilita' e completezza), non si prova a vincere
+    una gara fra thread: un test del genere sarebbe intermittente e misurerebbe lo
+    scheduler invece del codice. E' lo stesso criterio di test_generate_cyber_pii, che
+    afferma l'invariante su tutti i campioni invece di sperare nel caso giusto."""
+
+    def test_the_active_detectors_are_immutable(self):
+        app.enable_packs(["cyber"])
+
+        for nome in ("ACTIVE_DETECTORS", "ACTIVE_KEEP", "ACTIVE_PACKS"):
+            with self.subTest(globale=nome):
+                self.assertIsInstance(getattr(app, nome), tuple)
+
+    def test_turning_a_pack_on_publishes_the_complete_set_at_once(self):
+        app.enable_packs([])
+        soli_core = len(app.ACTIVE_DETECTORS)
+
+        app.enable_packs(["cyber"])
+
+        attesi = soli_core + len(app.DETECTOR_PACKS["cyber"][0])
+        self.assertEqual(len(app.ACTIVE_DETECTORS), attesi)
+
+    def test_turning_it_off_goes_back_to_the_core_exactly(self):
+        app.enable_packs(["cyber"])
+
+        app.enable_packs([])
+
+        self.assertEqual(app.ACTIVE_DETECTORS, tuple(app.DETECTORS))
+        self.assertEqual(app.ACTIVE_KEEP, ())
+        self.assertEqual(app.ACTIVE_PACKS, ())
+
+    def test_an_unknown_pack_leaves_the_known_ones_active(self):
+        app.enable_packs(["cyber", "inesistente"])
+
+        self.assertEqual(app.ACTIVE_PACKS, ("cyber",))
+
+
 class TestTaxonomy(PackPolicyTestCase):
 
     def test_pack_labels_are_absent_when_the_pack_is_off(self):
