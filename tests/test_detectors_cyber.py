@@ -49,7 +49,8 @@ def _install_stubs():
 
 _install_stubs()
 
-import app  # noqa: E402
+import app     # noqa: E402
+import policy  # noqa: E402
 
 
 def find(label, text):
@@ -181,9 +182,17 @@ class TestIntegration(unittest.TestCase):
     )
 
     def setUp(self):
+        # Anche la POLICY, non solo i pacchetti: app.POLICY viene caricata all'import
+        # dal policy.json REALE dell'utente, quindi senza questo la suite passa o
+        # fallisce a seconda di come chi la lancia ha configurato l'app. Scoperto
+        # provando gli endpoint su un server vero: un keep_tags 'EMAIL' salvato a mano
+        # ha fatto diventare rossi due test che non nominano nessuna policy.
+        self._policy = app.POLICY
+        app.POLICY = policy.Policy()
         app.enable_packs(["cyber"])
 
     def tearDown(self):
+        app.POLICY = self._policy
         app.enable_packs([])
 
     def test_pack_is_opt_in(self):

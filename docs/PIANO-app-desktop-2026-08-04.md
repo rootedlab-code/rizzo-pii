@@ -18,6 +18,14 @@ dipendenza dall'ordine preesistente (`test_generate_cyber_pii::test_registering_
 fallisce se i test girano in ordine inverso). Verificato preesistente escludendo i
 file nuovi. Fuori dal piano, da decidere a parte.
 
+**D10 — la suite dipendeva dalla configurazione della macchina.** `app.POLICY` viene
+caricata all'import dal `policy.json` REALE dell'utente: qualunque test che chiami
+`analyze()` senza reimpostarla eredita la configurazione di chi lancia i test. Trovato
+provando gli endpoint su un server vero — un `keep_tags: EMAIL` salvato a mano ha fatto
+diventare rossi due test che non nominano nessuna policy. Corretto in
+`test_detectors_cyber` e in `AnalyzeTestCase`; **gli altri file che chiamano `analyze()`
+vanno controllati con lo stesso criterio.**
+
 Follow-up aperto: `create_mock_model.py` genera ancora un modello finto in
 `models/rizzo-pii-0.3B-v1.2.0/`, il path che gli spec hanno smesso di usare.
 
