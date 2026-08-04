@@ -251,6 +251,29 @@ equivale a `full` (maschera tutto). L'interfaccia lo dichiara; da riga di comand
 Codice, documentazione completa e formato dello scope:
 [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
 
+### Non c'è un installer, e non è una mancanza
+
+**Non viene distribuito nessun eseguibile pronto**, né adesso né in programma. Chi vuole
+l'applicazione desktop la **compila dal sorgente**: `docs/BUILD.md` sul branch `dev`.
+
+Il motivo è di sicurezza, non di comodità. Un installer da ~2 GB **non firmato** con un
+certificato di code signing chiederebbe a un operatore di eseguire un binario di
+provenienza non verificabile — per lavorarci sopra documenti che contengono gli indirizzi
+del suo cliente e gli indicatori di un avversario. È esattamente l'abitudine che chi fa
+questo mestiere passa la giornata a scoraggiare negli altri, e un progetto open source
+appena nato non ha né la reputazione né il certificato per chiedere quella fiducia.
+
+Compilare dal sorgente è più lento e **verificabile**: si legge cosa si sta impacchettando.
+
+Cosa serve, in breve: Python con `pyinstaller`, il modello scaricato in
+`models/rizzo-pii-0.3B-security/`, e — per la finestra nativa — Rust e Node. Il modello
+che finisce nel pacchetto lo decide `PII_BUILD_MODEL`, e il build si ferma subito se
+quella directory non è un checkpoint.
+
+Il sidecar (backend Python impacchettato) è stato costruito e provato: parte, risponde, e
+dichiara correttamente quale checkpoint contiene. Il bundle completo delle tre
+piattaforme **non** è stato verificato qui.
+
 ### Quattro difetti trovati usandolo su un documento vero, e risolti
 
 Il modello aveva superato un test cieco da 1.000 righe con tutte le regole. Poi è stato
