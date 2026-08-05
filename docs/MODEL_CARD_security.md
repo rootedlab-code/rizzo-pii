@@ -234,7 +234,7 @@ python src/app/app.py --detectors cyber --profile security-report \
 Risultato, misurato su questo checkpoint:
 
 ```
-Il [DATE_1] [FULLNAME_1] ha rilevato il C2 198.51.100.7 (evil.invalid)
+Il [DATE_1] [FULLNAME_1] ha rilevato il C2 198.51.100.7 (evil.example)
 verso il nostro host [IP_1].
 ```
 
@@ -315,10 +315,14 @@ lavorato e non esserlo.
 - **Non copre il tradecraft.** Nomi di strumenti, VPN, sandbox, procedure non sono PII e
   nessun tag li prevede: un report anonimizzato racconta comunque *come* si lavora.
 - **Non sostituisce una rilettura umana.** Riduce di molto cosa resta da guardare; non
-  azzera. Un difetto trovato su un documento vero e non dall'holdout: il dominio del
-  committente è uscito in chiaro sette volte perché il suo TLD non era nella lista, e il
-  detector falliva **in silenzio** — mentre gli URL che contenevano lo stesso dominio
-  erano mascherati, cioè il documento sembrava protetto proprio dove non lo era.
+  azzera. Il difetto che lo dimostra è stato trovato su un documento vero e non
+  dall'holdout — il dominio del committente in chiaro sette volte perché il suo TLD non
+  era fra i 119 della lista, mentre gli URL con lo stesso dominio erano mascherati — ed è
+  [risolto](#quattro-difetti-trovati-usandolo-su-un-documento-vero-e-risolti): ciò che
+  l'analista dichiara nello scope viene rilevato comunque, e i token con estensione fuori
+  lista vengono segnalati invece di fallire in silenzio. Resta vera la classe del
+  problema: una lista chiusa può essere incompleta altrove, e quando lo è il documento
+  sembra protetto proprio dove non lo è.
 - **Non è validato fuori dall'italiano.** Il modello di partenza è multilingue, questo
   fine-tuning non ha rimisurato le altre sette lingue.
 
