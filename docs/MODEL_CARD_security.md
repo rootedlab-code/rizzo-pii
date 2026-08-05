@@ -30,16 +30,31 @@ Serve ad anonimizzare documenti **in locale** prima di mandarli a un LLM esterno
 > tecnici**: IP, domini, URL, hash, MAC, ASN, wallet, identificativi cloud. Quelli li
 > risolve una rete di **detector deterministici** che sta nel codice, non nei pesi.
 >
-> Se lo usi da solo, l'effetto non è "l'IP resta in chiaro": è **peggio**. Misurato su
-> questo stesso checkpoint:
+> Se lo usi da solo, l'effetto non è "l'IP resta in chiaro": è **peggio**. Stessa frase,
+> stesso checkpoint, cambia solo il pacchetto di detector:
 >
 > ```
-> senza i detector →  ha isolato 203.[ID_DOC_1]42     ← l'indirizzo esce MUTILATO
-> con i detector   →  ha isolato [IP_1]
+> ingresso            L'host colpito ha isolato 203.0.113.42.
+> senza i detector →  L'host colpito ha isolato 203[ID_DOC_1]42.   ← MUTILATO
+> con i detector   →  L'host colpito ha isolato [IP_1].
 > ```
 >
-> Il modello inventa un'entità su un pezzo dell'indirizzo e lascia leggibile il resto:
-> il documento **sembra** protetto proprio dove non lo è.
+> Riproducibile con il modello scaricato in `models/rizzo-pii-0.3B-security/`, una volta
+> senza e una volta con il pacchetto:
+>
+> ```bash
+> export PII_MODEL_DIR=$PWD/models/rizzo-pii-0.3B-security
+> python src/app/app.py --port 5099                     # senza: solo la rete core
+> python src/app/app.py --port 5099 --detectors cyber   # con
+> curl -s localhost:5099/analyze -H 'Content-Type: application/json' \
+>      --data '{"text": "L'\''host colpito ha isolato 203.0.113.42."}'
+> ```
+>
+> Il modello inventa un'entità su un pezzo dell'indirizzo e lascia leggibile il resto: il
+> documento **sembra** protetto proprio dove non lo è. Il punto di taglio si sposta con la
+> frase — altrove escono due segnaposto per due punti, e un secondo indirizzo nella stessa
+> riga resta intero — ed è la parte peggiore: nello stesso documento uno esce rotto e
+> l'altro no, e a occhio non si distingue quale.
 >
 > **Il codice che serve — detector cyber, policy per ruolo, scope d'ingaggio — vive
 > qui:** [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).
@@ -134,6 +149,22 @@ vanno rilette a mano.
 Nota su `IBAN` e `CF`: nella tabella `CF` è a 1.000 e `IBAN` a 0.357 perché il primo ha
 un checksum verificabile e il secondo, nel gold, compare spesso in forme che la rete non
 convalida. Dove il checksum passa, la rete è esatta e vince sul modello.
+
+**Come si rifà il conto, e cosa lo limita.** Il campione cieco **non è distribuito**:
+deriva da Ai4Privacy (CC-BY-4.0) e DeepMount, licenze di terzi mai verificate per la
+ridistribuzione. Quindi questa tabella **non è riproducibile da fuori** — è un limite
+reale, non un dettaglio. Quello che è versionato è la sua **impronta**
+(`dataset/validation/test_riserva.sha256`), che permette almeno di provare di avere lo
+stesso file di 1.000 righe. Chi ce l'ha rigenera tutto con tre comandi:
+
+```bash
+python src/training/predict_entities.py dataset/validation/test_riserva_legale.jsonl \
+    --out pred.jsonl --model <checkpoint>
+python src/training/evaluate_entities.py dataset/validation/test_riserva_legale.jsonl \
+    --pred pred.jsonl --with-detectors --packs "" --normalize
+python src/training/mcnemar.py dataset/validation/test_riserva_legale.jsonl \
+    --a pred_base.jsonl --b pred_fork.jsonl --per-tag 100
+```
 
 > **Una versione precedente di questa scheda riportava 0.806 → 0.858.** Quei numeri
 > venivano da un apparato di valutazione che ricostruiva il testo unendo i token
