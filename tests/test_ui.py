@@ -81,6 +81,13 @@ class TestControlli(UITestCase):
         self.assertIn('id="avviso"', self.html)
         self.assertIn("tld_sconosciuti", self.html)
 
+    def test_the_dormant_tags_note_reaches_the_screen(self):
+        # i tag che il campo non puo' mostrare sono esattamente quelli che salvare
+        # cancellava: se non compaiono da nessuna parte, chi salva crede di non averli
+        # mai scritti — e il dato esiste nell'API senza arrivare a chi guarda
+        self.assertIn('id="cfgKeepDormant"', self.html)
+        self.assertIn("p.dormant", self.html)
+
     def test_there_is_an_amber_style_that_is_not_an_error(self):
         # un profilo che non puo' mantenere la promessa non e' un fallimento: usare
         # il rosso direbbe all'utente che qualcosa e' andato storto, e non e' vero

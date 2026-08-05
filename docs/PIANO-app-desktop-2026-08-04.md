@@ -36,6 +36,25 @@ vanno controllati con lo stesso criterio.**
 Follow-up aperto: `create_mock_model.py` genera ancora un modello finto in
 `models/rizzo-pii-0.3B-v1.2.0/`, il path che gli spec hanno smesso di usare.
 
+## Chiuso dopo questo piano — 2026-08-05
+
+- **La metà da riga di comando di D3.** La fase 2 aveva reso onesto il profilo solo
+  dentro `POST /policy`: da terminale `--profile security-report` restava un sinonimo
+  silenzioso di `full`. `9d3d9c2` porta la stessa promessa all'avvio (`policy_di_avvio()`
+  accende i pacchetti del profilo, `avviso_requisiti()` dichiara l'ingaggio mancante).
+- **D8**, che questo piano dichiarava fuori scope. `tag_dormienti()` conserva sul disco i
+  tag che la configurazione corrente non sa nominare — il modale non può mostrarli,
+  quindi salvando non può volerli cancellare — e `GET/POST /policy` più il modale li
+  dichiarano invece di lasciarli sparire in silenzio. Riprodotto sul server vero prima e
+  dopo: `keep_tags: ["EMAIL","IP"]` a pacchetto spento, Salva, e `IP` è ancora nel file.
+
+**Ancora aperto, e vale la pena saperlo:** oltre a **D9**, la suite ha una seconda
+dipendenza dall'ordine della stessa famiglia — lo stub del modello che vince è quello
+del **primo** file di test importato (`sys.modules.setdefault`), quindi `known_tags()`
+cambia con l'ordine. Trovato scrivendo i test di D8: un test che nominava `AGE` passava
+nella suite intera e falliva da solo. Aggirato usando un tag della rete core, non
+risolto.
+
 ---
 
 ## 1. Obiettivo

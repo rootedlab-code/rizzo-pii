@@ -725,6 +725,23 @@ def avviso_requisiti(profile):
             f"maschera tutto. Indicalo con --scope-file o PII_SCOPE_FILE.")
 
 
+def tag_dormienti(cfg=None):
+    """I tag salvati che questa configurazione non sa nemmeno nominare.
+
+    Sono fuori dalla tassonomia attiva — tipicamente le label di un pacchetto spento:
+    `load_policy` li scarta con un avviso, il modale non li elenca perche' non li
+    conosce, e `POST /policy` li rifiuterebbe come sconosciuti. Quindi non possono
+    tornare indietro da chi salva, e riscrivere solo cio' che e' tornato indietro e'
+    l'unica cosa che li cancella: aprire l'ingranaggio e premere Salva con il pacchetto
+    spento bastava a perdere per sempre un `IP` scritto quando era acceso.
+
+    Dormienti, non morti: riaccendendo il pacchetto rientrano nella tassonomia e
+    tornano a valere, senza che nessuno debba riscriverli."""
+    cfg = policy.load_file() if cfg is None else cfg
+    attivi = known_tags()
+    return [t for t in policy.parse_tags(cfg.get("keep_tags")) if t not in attivi]
+
+
 def _riscrivi_policy(profile, keep):
     """Salva e ricostruisce la policy dallo stato IN ESECUZIONE. Va chiamata col lock.
 
@@ -734,9 +751,13 @@ def _riscrivi_policy(profile, keep):
 
     Le chiavi che l'interfaccia non espone — `keep_roles`, `detectors` — si rileggono e
     si riscrivono tali e quali: salvare dal modale non deve cancellare regole per ruolo
-    scritte a mano, ne' spegnere i detector al prossimo avvio."""
+    scritte a mano, ne' spegnere i detector al prossimo avvio. Stessa regola per i tag
+    che l'interfaccia non puo' mostrare (vedi `tag_dormienti`): sul disco restano, in
+    memoria no — la policy in esecuzione contiene solo cio' che in questa
+    configurazione puo' davvero applicarsi."""
     cfg = policy.load_file()
-    policy.save_file(profile, keep, cfg.get("keep_roles"), detectors=list(ACTIVE_PACKS))
+    salvati = list(keep) + tag_dormienti(cfg)
+    policy.save_file(profile, salvati, cfg.get("keep_roles"), detectors=list(ACTIVE_PACKS))
     roles = policy.resolve_roles(profile, cfg.get("keep_roles"), known_tags())
     return policy.Policy(keep_tags=keep, profile=profile, keep_roles=roles)
 
@@ -756,6 +777,10 @@ def policy_get():
                      for nome, req in policy.PROFILE_REQUIRES.items()},
         "unmet": _requisiti_mancanti(POLICY.profile),
         "packs": list(ACTIVE_PACKS),
+        # I tag salvati che questa configurazione non sa nominare: il modale non li
+        # mostrerebbe da nessun'altra parte, e sono proprio quelli che salvare
+        # cancellava. Dirli e' l'unico modo perche' chi salva sappia cosa sta tenendo.
+        "dormant": tag_dormienti(),
         "known_tags": sorted(known_tags()),
         "high_risk_tags": sorted(policy.HIGH_RISK_TAGS),
         "policy_path": str(policy.policy_path()),
@@ -786,8 +811,9 @@ def policy_post():
             return jsonify({"error": "Tag non riconosciuti: " + ", ".join(unknown)}), 400
         POLICY = _riscrivi_policy(profile, keep)
         mancanti = _requisiti_mancanti(profile)
+        dormienti = tag_dormienti()
     return jsonify({"ok": True, **POLICY.as_dict(), "packs": list(ACTIVE_PACKS),
-                    "packs_enabled": accesi, "unmet": mancanti})
+                    "packs_enabled": accesi, "unmet": mancanti, "dormant": dormienti})
 
 
 @app.route("/detectors", methods=["GET"])
@@ -1290,6 +1316,7 @@ PAGE = r"""
       <label data-i18n="cfg_keep">Tag lasciati in chiaro</label>
       <input id="cfgKeep" type="text" placeholder="AGE,GENDER" spellcheck="false">
       <span class="sub" data-i18n="cfg_keep_note">Elenco separato da virgole; vuoto = maschera tutto.</span>
+      <span class="sub" id="cfgKeepDormant" style="display:none"></span>
     </div>
     <div class="cfg-row">
       <label data-i18n="cfg_scope">File di ingaggio (scope)</label>
@@ -1367,6 +1394,8 @@ const T = {
   cfg_profile_roles:r=>"lascia in chiaro per ruolo: "+r,
   cfg_profile:"Profilo di anonimizzazione", cfg_keep:"Tag lasciati in chiaro",
   cfg_keep_note:"Elenco separato da virgole; vuoto = maschera tutto.",
+  cfg_keep_dormant:t=>"Restano salvati e non attivi in questa configurazione: "+t+
+    " — servono un pacchetto di detector spento; salvando non si perdono.",
   cfg_model:"Modello",
   cfg_model_unknown:"non identificato (pacchetto precedente al timbro)",
   cfg_model_labels:n=>n+" etichette",
@@ -1428,6 +1457,8 @@ const T = {
   cfg_profile_roles:r=>"left in clear by role: "+r,
   cfg_profile:"Anonymization profile", cfg_keep:"Tags left in clear",
   cfg_keep_note:"Comma-separated list; empty = mask everything.",
+  cfg_keep_dormant:t=>"Saved but inactive in this configuration: "+t+
+    " — they belong to a detector pack that is off; saving does not lose them.",
   cfg_model:"Model",
   cfg_model_unknown:"unidentified (package predates the stamp)",
   cfg_model_labels:n=>n+" labels",
@@ -1690,6 +1721,12 @@ async function openConfig(){
     sel.onchange=()=>{$('cfgKeep').value=(p.profiles[sel.value]||[]).join(',');mostraNota();};
     $('cfgKeep').value=(p.keep_tags||[]).join(',');
     $('cfgKeep').title=(p.known_tags||[]).join(', ');
+    // i tag salvati che questa configurazione non sa nominare: non stanno nel campo
+    // qui sopra, quindi senza questa riga l'utente crede di averli persi - o peggio,
+    // di non averli mai scritti
+    const dorm=$('cfgKeepDormant'), fermi=p.dormant||[];
+    dorm.style.display=fermi.length?'block':'none';
+    dorm.textContent=fermi.length?tt('cfg_keep_dormant')(fermi.join(', ')):'';
   }catch{}
   try{
     // Sola lettura: il file di ingaggio non entra da qui. Contiene gli IP del cliente

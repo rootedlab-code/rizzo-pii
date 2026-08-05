@@ -185,6 +185,62 @@ class TestDetectorsEndpoint(EndpointTestCase):
         self.assertEqual(app.POLICY.profile, "clinical")
 
 
+class TestSalvareNonCancellaCioCheNonSiVede(EndpointTestCase):
+    """Il modale puo' salvare solo cio' che mostra, e mostra solo la tassonomia attiva.
+
+    Con il pacchetto 'cyber' spento, un `keep_tags: ["IP"]` scritto quando era acceso non
+    compare nel campo, `POST /policy` lo rifiuterebbe come tag sconosciuto, e riscrivere
+    il file con i soli tag tornati indietro lo cancellava dal disco: bastava aprire
+    l'ingranaggio e premere Salva. Nessuno aveva chiesto di perderlo.
+
+    Il setUp della classe base accende 'cyber': qui si parte SPENTI di proposito, perche'
+    e' la configurazione con cui parte l'app impacchettata."""
+
+    def setUp(self):
+        super().setUp()
+        app.enable_packs([])
+        app.POLICY = policy.Policy()
+        policy.save_file("full", ("EMAIL", "IP"))     # scritto a pacchetto acceso
+
+    def test_saving_keeps_the_tag_the_modal_cannot_show(self):
+        r = self.client.post("/policy", json={"profile": "full", "keep_tags": "EMAIL"})
+
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("IP", policy.load_file()["keep_tags"])
+
+    def test_the_running_policy_does_not_pretend_that_tag_applies(self):
+        # sul disco resta, in memoria no: in questa configurazione 'IP' non e' un tag
+        # che qualcosa possa produrre, e una policy che lo elencasse mentirebbe
+        self.client.post("/policy", json={"profile": "full", "keep_tags": "EMAIL"})
+
+        self.assertNotIn("IP", app.POLICY.keep_tags)
+
+    def test_a_visible_tag_that_the_user_removed_is_really_removed(self):
+        # la conservazione vale per cio' che il modale non poteva mostrare, non per
+        # cio' che l'utente ha tolto guardandolo
+        self.client.post("/policy", json={"profile": "full", "keep_tags": ""})
+
+        salvati = policy.load_file()["keep_tags"]
+        self.assertNotIn("EMAIL", salvati)
+        self.assertIn("IP", salvati)
+
+    def test_the_response_says_what_it_kept(self):
+        r = self.client.post("/policy", json={"profile": "full", "keep_tags": "EMAIL"})
+
+        self.assertEqual(r.get_json()["dormant"], ["IP"])
+
+    def test_reading_the_policy_says_it_too(self):
+        self.assertEqual(self.client.get("/policy").get_json()["dormant"], ["IP"])
+
+    def test_turning_the_pack_on_brings_it_back_to_life(self):
+        self.client.post("/policy", json={"profile": "full", "keep_tags": "EMAIL"})
+
+        app.enable_packs(["cyber"])
+
+        self.assertEqual(app.tag_dormienti(), [])
+        self.assertIn("IP", policy.load_policy(known_tags=app.known_tags()).keep_tags)
+
+
 class TestSecurityReportProfileIsHonest(EndpointTestCase):
     """Il profilo o funziona, o dice perche' non puo'.
 
