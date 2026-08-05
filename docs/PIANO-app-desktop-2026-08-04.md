@@ -24,6 +24,8 @@ Difetto trovato durante il lavoro e **non** risolto: **D9** — la suite ha una
 dipendenza dall'ordine preesistente (`test_generate_cyber_pii::test_registering_does_not_break_the_upstream_slots`
 fallisce se i test girano in ordine inverso). Verificato preesistente escludendo i
 file nuovi. Fuori dal piano, da decidere a parte.
+→ **chiuso il 2026-08-05**, insieme a due casi della stessa famiglia che il piano non
+conosceva: vedi «Chiuso dopo questo piano» qui sotto.
 
 **D10 — la suite dipendeva dalla configurazione della macchina.** `app.POLICY` viene
 caricata all'import dal `policy.json` REALE dell'utente: qualunque test che chiami
@@ -48,12 +50,24 @@ Follow-up aperto: `create_mock_model.py` genera ancora un modello finto in
   dichiarano invece di lasciarli sparire in silenzio. Riprodotto sul server vero prima e
   dopo: `keep_tags: ["EMAIL","IP"]` a pacchetto spento, Salva, e `IP` è ancora nel file.
 
-**Ancora aperto, e vale la pena saperlo:** oltre a **D9**, la suite ha una seconda
-dipendenza dall'ordine della stessa famiglia — lo stub del modello che vince è quello
-del **primo** file di test importato (`sys.modules.setdefault`), quindi `known_tags()`
-cambia con l'ordine. Trovato scrivendo i test di D8: un test che nominava `AGE` passava
-nella suite intera e falliva da solo. Aggirato usando un tag della rete core, non
-risolto.
+- **D9**, la dipendenza dall'ordine. Il caso che il piano nominava
+  (`test_generate_cyber_pii::test_registering_does_not_break_the_upstream_slots`) **non si
+  riproduce più**: provato in ordine inverso e con ogni singolo modulo eseguito prima, è
+  verde. Erano vivi altri due casi, entrambi della stessa famiglia — `app.nlp` è uno per
+  processo e lo installa il **primo** file importato:
+  1. `test_packs_policy` asseriva `FULLNAME` nella tassonomia: verde nella suite, rosso in
+     ordine inverso, dove vince lo stub di `test_ui` che non ha label.
+  2. **Il peggiore, e non era noto:** lo stub di `test_model_info` era un
+     `SimpleNamespace` con un attributo `__call__`, che **non è chiamabile** — Python
+     cerca i metodi speciali sul tipo. Quel file non chiama mai `analyze()`, quindi da
+     solo passava; quando toccava a lui arrivare per primo, **33 test** di altri file
+     morivano con `'SimpleNamespace' object is not callable`. Emerso solo provando ordini
+     casuali: 2 permutazioni su 22.
+
+  Chiuso da `tests/modello_finto.py`: chi dipende dalle label del modello se le impone in
+  `setUp` e le restituisce da solo, e il finto condiviso è una classe chiamabile. La
+  regola è in `CONTRIBUTING.md`. **Verificato su 42 ordini** (alfabetico, inverso, 40
+  casuali) più i 21 moduli eseguiti singolarmente: tutto verde.
 
 ---
 

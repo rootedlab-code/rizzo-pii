@@ -16,6 +16,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import modello_finto   # noqa: E402
 
 MODEL_LABELS = ("O", "B-FULLNAME", "I-FULLNAME", "B-AGE", "B-GENDER", "B-DATE", "B-TIME",
                 "B-AMOUNT", "B-EMAIL", "B-IBAN", "B-CF")
@@ -154,6 +157,9 @@ class TestPolicyEndpoint(AnalyzeTestCase):
 
     def setUp(self):
         super().setUp()
+        # la tassonomia esposta da /policy e' modello + rete: il modello va imposto,
+        # altrimenti si asserisce su quello del primo file di test importato
+        modello_finto.imponi(self, app, MODEL_LABELS)
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_dir = policy.server_config.config_dir
         policy.server_config.config_dir = lambda: Path(self._tmp.name)
@@ -168,8 +174,10 @@ class TestPolicyEndpoint(AnalyzeTestCase):
         body = self.client.get("/policy").get_json()
         self.assertEqual(body["profile"], policy.DEFAULT_PROFILE)
         self.assertIn("clinical", body["profiles"])
-        self.assertIn("EMAIL", body["known_tags"])       # dal modello (stub)
-        self.assertIn("TARGA", body["known_tags"])       # dalla rete regex
+        # GENDER e non EMAIL: EMAIL lo produce anche la rete core, quindi passerebbe
+        # pure con un modello senza tassonomia e non proverebbe niente sul modello
+        self.assertIn("GENDER", body["known_tags"])      # solo dal modello (stub)
+        self.assertIn("TARGA", body["known_tags"])       # solo dalla rete regex
 
     def test_post_applies_immediately_and_persists(self):
         r = self.client.post("/policy", json={"profile": "full", "keep_tags": "EMAIL"})

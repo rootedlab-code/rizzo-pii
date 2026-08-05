@@ -21,6 +21,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import modello_finto   # noqa: E402
 
 MODEL_LABELS = ("O", "B-FULLNAME", "I-FULLNAME", "B-EMAIL", "B-IBAN")
 
@@ -175,6 +178,15 @@ class TestPubblicazioneAtomica(PackPolicyTestCase):
 
 
 class TestTaxonomy(PackPolicyTestCase):
+    """La tassonomia e' modello + rete attiva, quindi qui il modello va imposto.
+
+    `app.nlp` e' uno per processo e lo installa il primo file di test importato: senza
+    `imponi`, `assertIn("FULLNAME", ...)` passava nella suite intera e falliva in ordine
+    inverso, dove vince lo stub di `test_ui` che non ha label."""
+
+    def setUp(self):
+        super().setUp()
+        modello_finto.imponi(self, app, MODEL_LABELS)
 
     def test_pack_labels_are_absent_when_the_pack_is_off(self):
         app.enable_packs([])

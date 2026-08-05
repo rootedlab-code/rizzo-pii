@@ -20,19 +20,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "app"))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import model_info as mi     # noqa: E402
+import modello_finto        # noqa: E402
 
 
 def _install_stubs():
-    """Stessi stub del resto della suite: qui non interessa cosa il modello predice."""
+    """Stessi stub del resto della suite: qui non interessa cosa il modello predice.
+
+    Il finto viene da `modello_finto` e non da un `SimpleNamespace` con un attributo
+    `__call__`: i metodi speciali Python li cerca sul TIPO, non sull'istanza, quindi
+    quello non era chiamabile. Non si notava perche' questo file non chiama mai
+    `analyze()` — ma lo stub e' installato con `setdefault`, quindi quando toccava a
+    questo file arrivare per primo lo ereditavano tutti gli altri, e i 33 test che
+    passano da `analyze()` morivano con 'SimpleNamespace object is not callable'."""
     torch = types.ModuleType("torch")
     torch.cuda = types.SimpleNamespace(is_available=lambda: False)
     sys.modules.setdefault("torch", torch)
     transformers = types.ModuleType("transformers")
-    transformers.pipeline = lambda *a, **k: types.SimpleNamespace(
-        model=types.SimpleNamespace(config=types.SimpleNamespace(
-            label2id={f"B-L{i}": i for i in range(44)})),
-        __call__=lambda *a, **k: [])
+    transformers.pipeline = lambda *a, **k: modello_finto.ModelloFinto(
+        [f"B-L{i}" for i in range(44)])
     sys.modules.setdefault("transformers", transformers)
     fitz = types.ModuleType("fitz")
     fitz.open = lambda *a, **k: None

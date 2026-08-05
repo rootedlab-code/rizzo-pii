@@ -62,6 +62,23 @@ for real):
 python -m unittest discover -s tests
 ```
 
+**The stub is process-wide, so two rules keep the suite order-independent.** Every test
+file installs its own `transformers` stub with `sys.modules.setdefault`: the first file
+imported wins, and `app.nlp` is a single object for the whole process.
+
+1. A test that asserts on the **model's labels** must impose them —
+   `modello_finto.imponi(self, app, MODEL_LABELS)` in `setUp` — instead of hoping its own
+   stub won. Otherwise the assertion is green in the full suite and red on its own.
+2. A stub pipeline must be **callable**, i.e. a class with `__call__`. Python looks up
+   special methods on the type, so `SimpleNamespace(__call__=...)` is not.
+
+Check both by running the suite in more than one order, and each file on its own:
+
+```bash
+python -m unittest $(ls tests/test_*.py | sed 's|tests/|tests.|;s|\.py$||' | sort -r)
+python -m unittest tests.test_packs_policy      # and every other file, on its own
+```
+
 ## Pull request workflow
 
 1. Create a topic branch: `git checkout -b fix/short-description`.
