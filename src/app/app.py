@@ -686,6 +686,45 @@ def _accendi_pacchetti_del_profilo(profile):
     return mancanti
 
 
+def policy_di_avvio(cli_keep_tags=None, cli_profile=None):
+    """La policy con cui parte il processo, coi pacchetti che il profilo dichiara.
+
+    Stessa promessa di POST /policy, per chi entra da terminale. Serve un doppio
+    passaggio e non e' un giro inutile: QUALE sia il profilo lo sa solo `load_policy`
+    (puo' venire da --profile, da PII_PROFILE o da policy.json), ma `resolve_roles`
+    filtra le regole per ruolo sulla tassonomia ATTIVA — e a pacchetto spento le label
+    del profilo non ci sono, quindi le scarterebbe in silenzio. Il primo passaggio dice
+    quale profilo e', il secondo lo risolve contro la tassonomia che quel profilo si e'
+    appena portato dietro.
+
+    Il primo passaggio e' muto di proposito: risolto contro una tassonomia ancora
+    incompleta, avviserebbe che i tag del profilo vengono scartati — un allarme che la
+    riga dopo diventa falso. Avvisa il secondo, che e' quello definitivo.
+
+    Ritorna (policy, pacchetti accesi dal profilo)."""
+    sondaggio = policy.load_policy(cli_keep_tags=cli_keep_tags, cli_profile=cli_profile,
+                                   known_tags=known_tags(), warn=lambda _m: None)
+    accesi = _accendi_pacchetti_del_profilo(sondaggio.profile)
+    definitiva = policy.load_policy(cli_keep_tags=cli_keep_tags, cli_profile=cli_profile,
+                                    known_tags=known_tags())
+    return definitiva, accesi
+
+
+def avviso_requisiti(profile):
+    """Cosa il profilo non puo' mantenere in questa configurazione, o None se e' a posto.
+
+    Va chiamata dopo il caricamento dello scope: a quel punto i pacchetti li ha gia'
+    accesi `policy_di_avvio`, quindi l'unico requisito che puo' restare scoperto e'
+    l'unico che il programma non puo' soddisfare da solo. Il modale lo dichiara a
+    schermo; da riga di comando non lo diceva nessuno, e un profilo che decide per ruolo
+    senza che nessuna entita' abbia un ruolo e' un sinonimo silenzioso di 'full'."""
+    if "scope" not in _requisiti_mancanti(profile):
+        return None
+    return (f"ATTENZIONE: il profilo '{profile}' decide per ruolo, ma non c'e' un file "
+            f"d'ingaggio: nessuna entita' ha un ruolo, quindi si comporta come 'full' e "
+            f"maschera tutto. Indicalo con --scope-file o PII_SCOPE_FILE.")
+
+
 def _riscrivi_policy(profile, keep):
     """Salva e ricostruisce la policy dallo stato IN ESECUZIONE. Va chiamata col lock.
 
@@ -1759,10 +1798,12 @@ if __name__ == "__main__":
     # --keep-tags IP sarebbe scartato se il pacchetto cyber non fosse gia' attivo.
     if _args.detectors:
         enable_packs(resolve_packs(_args.detectors))
-    print("Detector attivi: core" + (f" + {', '.join(ACTIVE_PACKS)}" if ACTIVE_PACKS else ""))
 
-    POLICY = policy.load_policy(cli_keep_tags=_args.keep_tags, cli_profile=_args.profile,
-                                known_tags=known_tags())
+    POLICY, _dal_profilo = policy_di_avvio(cli_keep_tags=_args.keep_tags,
+                                           cli_profile=_args.profile)
+    print("Detector attivi: core" + (f" + {', '.join(ACTIVE_PACKS)}" if ACTIVE_PACKS else ""))
+    if _dal_profilo:
+        print(f"Accesi dal profilo '{POLICY.profile}': {', '.join(_dal_profilo)}")
     if POLICY.keep_tags:
         print(f"Policy: profilo '{POLICY.profile}' | lasciati in chiaro: "
               f"{', '.join(sorted(POLICY.keep_tags))}")
@@ -1780,6 +1821,10 @@ if __name__ == "__main__":
     if _n_scope or SCOPE.context_roles:
         print(f"Scope: {_n_scope} voci elencate | contesto: "
               + (", ".join(SCOPE.context_roles) if SCOPE.context_roles else "spento"))
+
+    _avviso = avviso_requisiti(POLICY.profile)
+    if _avviso:
+        print(_avviso)
 
     _host, _port = server_config.resolve(cli_host=_args.host, cli_port=_args.port)
 

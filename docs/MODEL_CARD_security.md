@@ -277,7 +277,10 @@ ingaggio. `GET /scope` riporta quante voci ci sono per ruolo, mai quali, e non h
 
 **Senza file d'ingaggio il profilo `security-report` non fa nulla**, ed è un caso da
 conoscere: senza ruoli nessuna regola per ruolo può applicarsi, quindi il profilo
-equivale a `full` (maschera tutto). L'interfaccia lo dichiara; da riga di comando no.
+equivale a `full` (maschera tutto). **Lo dicono entrambe le strade**: il modale a
+schermo, e l'avvio da terminale con una riga di `ATTENZIONE`. Il pacchetto `cyber`,
+invece, il profilo se lo accende da sé — `--detectors cyber` nel comando qui sopra lo
+rende esplicito, non è più necessario.
 
 Codice, documentazione completa e formato dello scope:
 [`rootedlab-code/rizzo-pii`, branch `dev`](https://github.com/rootedlab-code/rizzo-pii/tree/dev).

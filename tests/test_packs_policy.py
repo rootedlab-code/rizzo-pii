@@ -12,6 +12,7 @@ Tutti i valori sono presi dagli intervalli di documentazione (RFC 5737 / RFC 260
     python -m unittest discover -s tests
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -53,6 +54,7 @@ _install_stubs()
 
 import app        # noqa: E402
 import policy     # noqa: E402
+import scope      # noqa: E402
 
 SERVER_IP = "203.0.113.42"
 TEXT = f"Il server di staging risponde su {SERVER_IP} e il dominio e' interno.example."
@@ -262,6 +264,103 @@ class TestAnalyze(PackPolicyTestCase):
             atteso = policy.ACTION_KEEP if seg["label"] in tenuti else policy.ACTION_MASK
             with self.subTest(label=seg["label"]):
                 self.assertEqual(seg["action"], atteso)
+
+
+class TestAvvioDaRigaDiComando(PackPolicyTestCase):
+    """Da terminale il profilo deve valere quanto vale nell'interfaccia.
+
+    `POST /policy` accende i pacchetti che il profilo dichiara e dice cosa resta
+    scoperto; l'avvio da riga di comando non faceva ne' l'una ne' l'altra cosa, quindi
+    'security-report' restava un sinonimo silenzioso di 'full' per chi non passava anche
+    --detectors cyber. Qui si parte a pacchetti SPENTI di proposito: e' la configurazione
+    con cui parte l'app impacchettata."""
+
+    def setUp(self):
+        super().setUp()
+        app.enable_packs([])
+        self._env = {k: os.environ.pop(k)
+                     for k in ("PII_PROFILE", "PII_KEEP_TAGS", "PII_SCOPE_FILE")
+                     if k in os.environ}
+        self._tmp = tempfile.TemporaryDirectory()
+        self._config_dir = policy.server_config.config_dir
+        policy.server_config.config_dir = lambda: Path(self._tmp.name)
+        self._scope = app.SCOPE
+        app.SCOPE = scope.load_scope(None)          # nessun ingaggio caricato
+
+    def tearDown(self):
+        app.SCOPE = self._scope
+        policy.server_config.config_dir = self._config_dir
+        self._tmp.cleanup()
+        os.environ.update(self._env)
+        super().tearDown()
+
+    def test_the_regression_it_closes(self):
+        # si prova che il difetto esisteva: a pacchetto spento le label del profilo non
+        # sono nella tassonomia, resolve_roles le scarta e non resta nessuna regola
+        muto = policy.load_policy(cli_profile="security-report",
+                                  known_tags=app.known_tags(), warn=lambda _m: None)
+
+        self.assertEqual(muto.keep_roles, {})
+
+    def test_the_profile_turns_on_the_pack_it_needs(self):
+        _pol, accesi = app.policy_di_avvio(cli_profile="security-report")
+
+        self.assertEqual(accesi, ["cyber"])
+        self.assertIn("cyber", app.ACTIVE_PACKS)
+
+    def test_its_role_rules_survive_the_taxonomy_filter(self):
+        pol, _accesi = app.policy_di_avvio(cli_profile="security-report")
+
+        self.assertTrue(pol.keeps("IP", scope.ROLE_ADVERSARY))
+        # l'asimmetria che rende il profilo sicuro: cio' che e' del cliente, o di ruolo
+        # non determinato, resta mascherato
+        self.assertFalse(pol.keeps("IP", scope.ROLE_OWN))
+        self.assertFalse(pol.keeps("IP", scope.ROLE_UNKNOWN))
+
+    def test_a_profile_that_comes_from_the_file_turns_it_on_too(self):
+        # il motivo del doppio passaggio: il profilo puo' non venire dalla CLI, e quale
+        # sia lo sa solo load_policy
+        policy.save_file("security-report", ())
+
+        _pol, accesi = app.policy_di_avvio()
+
+        self.assertEqual(accesi, ["cyber"])
+
+    def test_a_profile_without_requirements_turns_on_nothing(self):
+        _pol, accesi = app.policy_di_avvio(cli_profile="clinical")
+
+        self.assertEqual(accesi, [])
+        self.assertEqual(app.ACTIVE_PACKS, ())
+
+    def test_the_pack_chosen_on_the_command_line_is_not_turned_off(self):
+        # l'insieme attivo e' l'unione: un profilo accende cio' che gli serve e non
+        # spegne mai cio' che l'utente aveva chiesto
+        app.enable_packs(["cyber"])
+
+        _pol, accesi = app.policy_di_avvio(cli_profile="clinical")
+
+        self.assertEqual(accesi, [])
+        self.assertIn("cyber", app.ACTIVE_PACKS)
+
+    def test_without_an_engagement_file_the_command_line_says_so(self):
+        app.policy_di_avvio(cli_profile="security-report")
+
+        avviso = app.avviso_requisiti("security-report")
+
+        self.assertIsNotNone(avviso)
+        self.assertIn("--scope-file", avviso)
+
+    def test_with_an_engagement_file_there_is_nothing_to_declare(self):
+        percorso = Path(self._tmp.name) / "ingaggio.json"
+        percorso.write_text(json.dumps({"own": {"IP": ["203.0.113.0/24"]}}),
+                            encoding="utf-8")
+        app.SCOPE = scope.load_scope(str(percorso))
+        app.policy_di_avvio(cli_profile="security-report")
+
+        self.assertIsNone(app.avviso_requisiti("security-report"))
+
+    def test_a_profile_without_requirements_declares_nothing(self):
+        self.assertIsNone(app.avviso_requisiti("full"))
 
 
 if __name__ == "__main__":
